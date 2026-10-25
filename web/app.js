@@ -1060,6 +1060,26 @@ function resetAll() {
   renderSteps();
 }
 
+// ---------- 主控 ↔ 子控：子控忙不忙、最近的消息 ----------
+const ADDR = { main: '主控', loader: '装载', transfer: '搬送', cb1: '药液槽 1', ob1: '单槽 1', cb2: '药液槽 2', ob2: '单槽 2', dr: '干燥槽' };
+const CMD = { DOCK: 'FOUP 到位', DOOR: '开 / 关门', MAP: '映射', TAKE: '取片', POSTURE: '姿态变换', RETURN: '分回 FOUP', MOVE: '移动', HOLD: '等待', PICK: '接片', PLACE: '放片', CHUCK_CLEAN: '洗夹爪', LIFT: '升降', RUN_UNIT: '执行单元', EXCHANGE: '换液' };
+function cmdText(b) {
+  const arg = b.cmd === 'LIFT' ? ` z=${b.z}` : b.cmd === 'MOVE' ? ` x=${b.x.toFixed(2)}` : b.cmd === 'RUN_UNIT' ? `「${b.unit.name}」${b.unit.steps.length} 步` : b.cmd === 'HOLD' ? ` ${b.s} s` : (b.cmd === 'PICK' || b.cmd === 'PLACE') ? ` ${b.nm}` : '';
+  return `${b.cmd}${arg}（${CMD[b.cmd] || ''}）`;
+}
+let msgSeen = -1, msgBus = null;
+function updateBus() {
+  if (L.bus !== msgBus) { msgBus = L.bus; msgSeen = -1; }     // 新的一批（新机台状态）：消息编号从头开始
+  $('#subs').innerHTML = L.subs.map(s => `<span class="${s.jobs.length ? 'busy' : ''}" title="${s.jobs.map(j => j.cmd).join('、') || '空闲'}">${ADDR[s.addr]}${s.jobs.length ? ' · ' + s.jobs.map(j => j.cmd).join('+') : ''}</span>`).join('');
+  const log = L.bus.log, last = log.length ? log[log.length - 1].id : 0;
+  if (last === msgSeen) return;
+  msgSeen = last;
+  $('#msgs').innerHTML = log.slice(-40).reverse().map(m => {
+    const body = m.type === 'cmd' ? cmdText(m.body) : m.type === 'done' ? `做完了 ${m.body.cmd}` : `报警：${m.body.msg}`;
+    return `<li class="${m.type}"><span class="tm">${fmtTime(m.t - chartT0)}</span><span>${ADDR[m.from]} → ${ADDR[m.to]}：${body}</span></li>`;
+  }).join('') || '<li><span></span><span>还没有消息</span></li>';
+}
+
 // ---------- 实时数值 ----------
 const VALS = [
   ['现在', () => L.phase || '—'],
@@ -1589,6 +1609,7 @@ function frameBody(now) {
     uiAcc = 0;
     if (!$('#dock').hidden) { drawLine(); drawPattern(); drawChart(); }
     updateVals();
+    updateBus();
     $('#time').textContent = fmtTime(L.t - chartT0);
     const pip = L.piping();
     updatePiping3D(pip);

@@ -129,6 +129,14 @@ ol#steps li.done::before{content:"✓";background:var(--ok);border-color:var(--o
 ol#steps li.cur{background:var(--cur);color:var(--fg);font-weight:700}
 ol#steps li.cur::before{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .vals{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:13px;margin:0}
+.subs{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.subs span{font-size:12px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);background:var(--panel2);color:var(--muted)}
+.subs span.busy{border-color:var(--accent);color:var(--accent);font-weight:700}
+.msgs{list-style:none;margin:6px 0 0;padding:0;font-size:12px;font-family:var(--f-mono);max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:6px;background:var(--chart-bg)}
+.msgs li{display:grid;grid-template-columns:44px 1fr;gap:6px;padding:2px 6px;border-bottom:1px solid var(--grid)}
+.msgs li .tm{color:var(--muted)}
+.msgs li.done{color:var(--muted)}
+.msgs li.alarm{color:var(--bad);font-weight:700}
 .vals dt{color:var(--muted)}
 .vals dd{margin:0;text-align:right;font-family:var(--f-mono)}
 
@@ -272,6 +280,10 @@ h4.fg .sub{color:var(--fg);font-weight:600;margin-left:6px}
       <ol id="steps"></ol>
       <h4 class="sec">实时数值</h4>
       <dl class="vals" id="vals"></dl>
+      <h4 class="sec">主控 ↔ 子控</h4>
+      <div class="note" style="margin-top:0">主控（真机在 Windows PC：画面、配方、调度）只发命令、看子控上报的状态；子控（真机在 Linux PC：装载、搬送、各个槽）执行，做完回"做完了"。</div>
+      <div class="subs" id="subs"></div>
+      <ol class="msgs" id="msgs"></ol>
     </section>
 
     <section class="tab" id="tab-recipe" hidden>
