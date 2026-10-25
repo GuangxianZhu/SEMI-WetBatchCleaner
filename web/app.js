@@ -196,12 +196,12 @@ for (const [id, n] of [['ob1', 1], ['ob2', 2]]) {
     [`${id}_pan`]: [`单槽 ${n} · 接液槽`, g, '把槽围起来的外槽。两侧的溢流和快排的水都落到这里，再从一根排液管出去，按液体切到酸排液 / 碱排液 / DIW 回收。'],
     [`${id}_inlet`]: [`单槽 ${n} · 槽底进液分配管`, g, 'DIW（和注进去的药）从槽底后角进来，沿两条长边往片间送，从顶部溢流走（上流）。'],
     [`${id}_shower`]: [`单槽 ${n} · 淋浴喷嘴`, g, '快排时喷水，让晶圆保持湿润，防止液面降下去时弯月面把图形拉倒；快排后补水时一直喷到晶圆重新浸没。'],
-    [`${id}_mix`]: [`单槽 ${n} · 混合块`, g, '冷 DIW 从这里穿过，HF、HCl、NH₄OH、H₂O₂（大 / 小流量两路）的注入阀插在后面，按比例把原液注进去。槽里浓度 = 原液流量 ÷ 总流量；满槽注药时浓度按 1 − e^(−t/τ) 爬升。'],
-    [`${id}_units`]: [`单槽 ${n} · 气体溶解单元 + 热 DIW 单元`, g, 'DIW → 气体溶解单元（N₂ / O₃ 溶解水，这一版不用）→ 热 DIW 单元（加热到设定温度）→ 热 DIW 阀，在混合块下游并进主路。SPM 之后先用热水冲：硫酸黏、难冲。'],
+    [`${id}_mix`]: [`单槽 ${n} · 混合块`, g, '冷 / 热 DIW 汇合后从这里穿过，HF、HCl、NH₄OH、H₂O₂（大 / 小流量两路）的注入阀插在后面，按比例把原液注进去。槽里浓度 = 原液流量 ÷ 总流量；满槽注药时浓度按 1 − e^(−t/τ) 爬升。'],
+    [`${id}_fcv`]: [`单槽 ${n} · 流量控制`, g, '冷 DIW、热 DIW 各一个阀，汇合以后经过这里（流量计 + 流量调节），把进槽的总流量控制在设定值，再进混合块。SPM 之后先用热水冲：硫酸黏、难冲。'],
     [`${id}_valves`]: [`单槽 ${n} · 阀门`, g, 'V1 冷 DIW、V2 热 DIW、V3～V7 注入阀、V8 淋浴、V9 快排（大口径，在槽底侧面）、V10～V12 排液分流（酸 / 碱 / 回收）。绿色 = 开，灰色 = 关。'],
-    [`${id}_pipes`]: [`单槽 ${n} · 管路`, g, '冷 DIW 从下往上穿过混合块，热 DIW 在下游并进来，从槽底进槽；溢流、快排落进接液槽，再分到酸 / 碱 / 回收。正在流的管子按液体颜色显示；顶栏"管路图"看 2D 图。'],
+    [`${id}_pipes`]: [`单槽 ${n} · 管路`, g, '冷 / 热 DIW 先汇合，经流量控制从下往上穿过混合块，从槽底进槽；溢流、快排落进接液槽，再分到酸 / 碱 / 回收（快排不进回收）。正在流的管子按液体颜色显示；顶栏"管路图"看 2D 图。'],
     [`${id}_mega`]: [`单槽 ${n} · 兆声振板`, g, '槽底、进液口旁边。约 1 MHz，帮忙把小颗粒冲走。这一版的配方在单槽里不开。'],
-    [`${id}_res`]: [`单槽 ${n} · 比电阻计 / 温度计`, g, '都装在槽里。比电阻判断冲洗干不干净：25 °C 纯水是 18.18 MΩ·cm，离子越多越低；冲到 ≥ 10 MΩ·cm 排水才切到回收。'],
+    [`${id}_res`]: [`单槽 ${n} · 比电阻计 / 温度计`, g, '都装在槽里。比电阻判断冲洗干不干净：25 °C 纯水是 18.18 MΩ·cm，离子越多越低；冲到 ≥ 10 MΩ·cm 以后再溢流 30 s，排水才切到回收。'],
     [`${id}_lifter`]: [`单槽 ${n} · 升降器`, g, '同药液槽的升降器。'],
   });
 }
@@ -345,7 +345,7 @@ function buildPiping3D(id, x) {
     else if (n.kind === 'heater') addPart(`${id}_heater`, box(0.22, 0.1, 0.12, MAT.heater, px, py, pz));
     else if (n.kind === 'filter') addPart(`${id}_filter`, group(cylY(0.05, 0.3, MAT.filter, px, py, pz), cylY(0.055, 0.03, MAT.resin, px, py + 0.16, pz)));
     else if (n.kind === 'mixer') addPart(`${id}_mix`, box(...sz, MAT.resin, px, py, pz));
-    else if (n.kind === 'unit') addPart(`${id}_units`, box(...sz, n.makes ? MAT.heater : MAT.panel, px, py, pz));
+    else if (n.kind === 'unit') addPart(`${id}_${n.part3 || 'units'}`, box(...sz, MAT.panel, px, py, pz));
     else if (n.kind === 'device') addPart(`${id}_mega`, box(...sz, MAT.mega, px, py, pz));
     else if (n.kind === 'junction') addPart(`${id}_pipes`, mesh(new THREE.SphereGeometry(0.017, 12, 8), MAT.resin, px, py, pz));
     else if (n.kind === 'valve') {
