@@ -8,7 +8,7 @@ import { resistivity, zeroConc, mixByParts } from '../chem.js';
 import { OneBath } from '../onebath.js';
 import { P } from '../params.js';
 import { gammaMix, collapseFrac, stressGPa, SURF } from '../surface.js';
-import { Line, simulate, STEPS } from '../tool.js';
+import { Line, simulate } from '../tool.js';
 import { evaluate } from '../result.js';
 import { PRESETS, DEFAULT } from '../recipe.js';
 
@@ -96,7 +96,7 @@ test('整机：标准配方跑完，9 项全部合格，没有违反联锁，晶
   assert.equal(L.trackingOk, true);
   assert.equal(ev.bad, 0, ev.items.filter(i => !i.ok).map(i => `${i.label} ${i.val}`).join('; '));
   assert.equal(L.batch.holder, 'foup');
-  assert.equal(L.stepTimes.length, STEPS.length);
+  assert.equal(L.stepTimes.length, L.steps.length);
   assert.ok(L.t > 40 * 60 && L.t < 120 * 60, `总时间 ${L.t / 60} min`);
 });
 
@@ -109,7 +109,7 @@ test('整机：四段搬送，每段在空气里约 11 s（资料来源 D6）', 
 test('整机：夹爪搬完药液都洗过，取干片前是干的（联锁）', () => {
   const L = new Line(DEFAULT);
   let pickedDryWithWet = false;
-  for (let i = 0; i < STEPS.length; i++) {
+  for (let i = 0; i < L.steps.length; i++) {
     L.startStep(i);
     while (L.busy) {
       const before = L.batch.holder;

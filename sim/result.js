@@ -12,12 +12,12 @@ export const fmtE = v => {
 };
 
 export function evaluate(L) {
-  const s = L.surf, R = L.R;
+  const s = L.surf, R = L.facts;    // 从配方归纳出来的：兆声功率、快排开不开淋浴、有没有 IPA、提拉速度
   const maxAir = L.air.log.reduce((m, a) => Math.max(m, a.t), 0);
   const worstAir = L.air.log.find(a => a.t === maxAir);
 
   const partHint = [];
-  if (!R.mega || R.megaP < 50) partHint.push('兆声没开或功率太低：小颗粒主要靠兆声冲走。');
+  if (R.megaP < 50) partHint.push('兆声没开或功率太低：小颗粒主要靠兆声冲走。');
   if (s.siLoss < 0.5) partHint.push('SC1 太稀、太冷或太短：硅几乎没被刻，颗粒没被"掏松"。');
   if (s.carryMmol > 1) partHint.push(`冲洗不干净就进了 SC1：带进去约 ${s.carryMmol.toFixed(0)} mmol 杂质，变成盐粒粘在晶圆上，还污染了药液槽。`);
   if (maxAir > 30) partHint.push('搬得太慢：带着药液的表面在空气里局部变干，留下残留。');

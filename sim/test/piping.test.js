@@ -1,7 +1,7 @@
 // 管路：拓扑完整、流向和流程一致、联锁不被违反（docs/管路.md）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Line, PIPING, STEPS } from '../tool.js';
+import { Line, PIPING } from '../tool.js';
 import { ChemBath, CB } from '../chembath.js';
 import { OneBath } from '../onebath.js';
 import { P } from '../params.js';
@@ -95,7 +95,7 @@ const drainTo = (fl, id) => Object.keys(SINK_OF).filter(v => fl[`${id}.${v}>${SI
 // 整批跑一遍，每 0.5 s 检查一次管路；返回看到的情况
 function runBatch(recipe, each) {
   const L = new Line(recipe);
-  for (let i = 0; i < STEPS.length; i++) {
+  for (let i = 0; i < L.steps.length; i++) {
     L.startStep(i);
     while (L.busy) { L.step(0.5); each(L, L.piping()); }
   }
@@ -136,13 +136,22 @@ test('单槽，标准配方整批：快排、溢流、注药都走对的管，�
 
 test('单槽：开始注 HF 的那一刻（槽里还是干净的 DIW）排液已经切到酸排液', () => {
   const L = new Line(DEFAULT);
-  const i = STEPS.findIndex(s => s.id === 'dhf');
-  for (let j = 0; j < i; j++) { L.startStep(j); while (L.busy) L.step(0.5); }
-  assert.equal(L.ob2.fluid(), 'DIW');
-  L.startStep(i);
-  const { flows, bad } = L.piping();
-  assert.deepEqual(drainTo(flows, 'ob2'), ['sink.acid']);
-  assert.deepEqual(bad, []);
+  let checked = false;
+  for (let i = 0; i < L.steps.length && !checked; i++) {
+    L.startStep(i);
+    while (L.busy && !checked) {
+      const before = L.ob2.fluid(), was = !!L.ob2.inject;
+      L.step(0.1);
+      if (L.ob2.inject && !was) {            // 这一步刚开始注 HF
+        assert.equal(before, 'DIW');
+        const { flows, bad } = L.piping();
+        assert.deepEqual(drainTo(flows, 'ob2'), ['sink.acid']);
+        assert.deepEqual(bad, []);
+        checked = true;
+      }
+    }
+  }
+  assert.ok(checked, '标准配方里有注 HF 的步骤');
 });
 
 test('单槽，快排不开淋浴：淋浴阀一直不开，其余照样没有联锁问题', () => {
@@ -156,7 +165,7 @@ test('单槽，快排不开淋浴：淋浴阀一直不开，其余照样没有�
 test('单槽联锁：分流切错、全关、开两路，酸碱同注，注药没有 DIW，都报出来', () => {
   // 单槽 2 正在注 HF（满槽溢流）
   const ob = new OneBath();
-  ob.supply(DEFAULT.upflowLpm, P.coldC, { species: 'HF', ratio: 100 });
+  ob.supply(30, P.coldC, { species: 'HF', ratio: 100 });
   ob.step(1);
   const check = mutate => {
     const state = oneBathState('ob2', ob, { open: {}, run: {}, tank: {} });
@@ -184,7 +193,7 @@ test('单槽联锁：分流切错、全关、开两路，酸碱同注，注药�
 test('单槽回收的两条规则：干净的水快排也不进回收；冲干净以后还要再溢流一段时间才切回收', () => {
   const ob = new OneBath();                       // 新槽：满槽干净 DIW
   const dest = () => drainTo(computeFlows(PIPING, oneBathState('ob1', ob, { open: {}, run: {}, tank: {} })).flows, 'ob1');
-  ob.supply(DEFAULT.upflowLpm, P.coldC);
+  ob.supply(30, P.coldC);
   assert.deepEqual(dest(), ['sink.acid'], '刚开始溢流：先冲排液管');
   for (let t = 0; t < P.reclaimDelayS - 1; t += 0.5) ob.step(0.5);
   assert.deepEqual(dest(), ['sink.acid'], `还没到 ${P.reclaimDelayS} s`);
