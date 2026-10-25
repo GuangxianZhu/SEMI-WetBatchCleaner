@@ -1,5 +1,6 @@
 // 整机：装载区 → 药液槽 1（SPM）→ 单槽 1 → 药液槽 2（SC1）→ 单槽 2（DHF）→ 减压干燥槽 → 装载区。
 // 槽间搬送机械手一台走全线；每个槽有自己的升降器，只在槽内上下；搬完药液、以及取干片之前，机械手先去夹爪清洗干燥位。
+// 配方是"流程 → 单元 → 步骤"三层（sim/recipe.js）：流程决定走哪些槽，每个槽跑自己的单元，单元里一步一步做。
 //
 // 写法：每一步是一个生成器。每 yield 一次消耗一个时间步，line.step(dt) 用 next(dt) 把 dt 传进去；
 // par(...) 让几件事同时进行（例如单槽冲洗的同时，机械手去洗夹爪）。纯计算，不碰界面，node 里能直接跑。
@@ -9,7 +10,7 @@ import { OneBath } from './onebath.js';
 import { ChemBath } from './chembath.js';
 import { Dryer } from './dryer.js';
 import { Surface } from './surface.js';
-import { DEFAULT } from './recipe.js';
+import { DEFAULT, BATHS, cloneRecipe, unitOfBath, recipeFacts, describeSteps, describeCond } from './recipe.js';
 import { SPECIES } from './chem.js';
 import { buildGraph, chemBathTemplate, oneBathTemplate, computeFlows, chemBathState, oneBathState, checkInterlocks, FLUID_NAME } from './piping.js';
 
@@ -112,11 +113,12 @@ function* fromTank(L, id, nextId = null) {
 // 带着晶圆移动到下一个槽；airExtraS 模拟机械手半路被别的任务耽误
 function* transferTo(L, id) {
   const x = P.X[id];
-  if (L.R.airExtraS > 0) {
+  const extra = L.R.flow.airExtraS;
+  if (extra > 0) {
     yield* robotTo(L, (L.robot.x + x) / 2, `移动到${NAME[id]}`);
-    L.robot.task = `被别的任务耽误 ${L.R.airExtraS} s`;
-    L.phase = `机械手被别的任务耽误了 ${L.R.airExtraS} s，晶圆一直在空气里`;
-    yield* waitS(L.R.airExtraS);
+    L.robot.task = `被别的任务耽误 ${extra} s`;
+    L.phase = `机械手被别的任务耽误了 ${extra} s，晶圆一直在空气里`;
+    yield* waitS(extra);
   }
   yield* robotTo(L, x, `移动到${NAME[id]}`);
 }
@@ -134,8 +136,8 @@ function* chuckClean(L) {
 }
 
 // ---------- 单槽 ----------
-function* qdrCycle(L, id, Tin, label) {
-  const ob = L[id], shower = !!L.R.shower;
+function* qdrCycle(L, id, Tin, label, shower) {
+  const ob = L[id];
   L.phase = `${label}：快排，几秒内排空${shower ? '，淋浴让晶圆保持湿润' : '（没开淋浴，晶圆露在空气里）'}`;
   ob.startDump(shower);
   yield* until(() => ob.empty);
@@ -146,16 +148,16 @@ function* qdrCycle(L, id, Tin, label) {
   ob.stop();
 }
 
-function* rinseUpflow(L, id) {
-  const ob = L[id], R = L.R;
-  ob.supply(R.upflowLpm, P.coldC);
+function* rinseUpflow(L, id, s, tag) {
+  const ob = L[id];
+  ob.supply(s.lpm, s.T);
   let t = 0;
-  if (R.rinseMode === 'time') {
-    L.phase = `${NAME[id]}：上流冲洗 ${R.rinseTimeS} s（只按时间）`;
-    while (t < R.rinseTimeS) t += yield;
+  if (s.end === 'time') {
+    L.phase = `${tag}${NAME[id]}：上流冲洗 ${s.s} s（只按时间）`;
+    while (t < s.s) t += yield;
   } else {
-    L.phase = `${NAME[id]}：上流冲洗，等比电阻 ≥ ${R.rinseRho} MΩ·cm 且至少 ${R.rinseMinS} s`;
-    while (!(t >= R.rinseMinS && ob.rho >= R.rinseRho)) {
+    L.phase = `${tag}${NAME[id]}：上流冲洗，等比电阻 ≥ ${s.rho} MΩ·cm 且至少 ${s.minS} s`;
+    while (!(t >= s.minS && ob.rho >= s.rho)) {
       t += yield;
       if (t > 3600) { L.notes.push(`${NAME[id]}上流冲洗 1 小时还没到比电阻判定值`); break; }
     }
@@ -164,54 +166,78 @@ function* rinseUpflow(L, id) {
   L.rinseLog.push({ id, t, rho: ob.rho });
 }
 
-function* rinseOb1(L) {
-  const R = L.R;
-  for (let i = 0; i < R.ob1HotQdr; i++) yield* qdrCycle(L, 'ob1', R.hotT, `热水快排冲洗 ${i + 1}/${R.ob1HotQdr}`);
-  for (let i = 0; i < R.ob1ColdQdr; i++) yield* qdrCycle(L, 'ob1', P.coldC, `冷水快排冲洗 ${i + 1}/${R.ob1ColdQdr}`);
-  yield* rinseUpflow(L, 'ob1');
+// 注药：满槽边进边溢；不停供液，下一步（通常是上流冲洗）接着换成纯 DIW
+function* injectStep(L, id, s, tag) {
+  const ob = L[id];
+  if (s.chem === 'HF' && ob.c.NH3 > 1e-5) L.notes.push(`${NAME[id]} 里还有氨水就进了 HF（会生成 NH₄F），SC1 之后要先冲干净`);
+  const nm = s.chem === 'HF' ? 'DHF' : FLUID_NAME[s.chem];
+  L.phase = `${tag}注入 ${nm}（1 : ${s.ratio}）${s.s} s：满槽边进边溢，浓度慢慢爬升`;
+  ob.supply(s.lpm, P.coldC, { species: s.chem, ratio: s.ratio });
+  yield* waitS(s.s);
 }
 
-function* rinseOb2(L) {
-  const R = L.R;
-  for (let i = 0; i < R.ob2Qdr; i++) yield* qdrCycle(L, 'ob2', P.coldC, `冷水快排冲洗 ${i + 1}/${R.ob2Qdr}`);
-  yield* rinseUpflow(L, 'ob2');
+// ---------- 单元：一个槽里一步一步做 ----------
+const stepTag = (i, n) => (n > 1 ? `[${i + 1}/${n}] ` : '');
+function* logStep(L, u, i, gen) {
+  const rec = { unit: u.id, i, kind: u.steps[i].kind, t0: L.t, t1: null };
+  L.stepLog.push(rec);
+  yield* gen;
+  rec.t1 = L.t;
 }
 
-function* dhf(L) {
-  const ob = L.ob2, R = L.R;
-  if (R.dhfS > 0) {
-    if (ob.c.NH3 > 1e-5) L.notes.push('单槽 2 里还有氨水就进了 HF（会生成 NH₄F），SC1 之后要先冲干净');
-    L.phase = `注入 DHF（1 : ${R.dhfRatio}）${R.dhfS} s：满槽边进边溢，浓度慢慢爬升`;
-    ob.supply(R.upflowLpm, P.coldC, { species: 'HF', ratio: R.dhfRatio });
-    yield* waitS(R.dhfS);
+function* chemBathUnit(L, u) {
+  const cb = L[u.bath], hasMega = !!BATHS[u.bath].mega;
+  for (let i = 0; i < u.steps.length; i++) {
+    const s = u.steps[i], mega = hasMega && s.mega > 0;
+    cb.mega = mega; cb.megaP = mega ? s.mega / 100 : 0;
+    L.phase = `${stepTag(i, u.steps.length)}${cb.kind} 浸泡 ${+(s.s / 60).toFixed(1)} min（${cb.Tset} °C）${mega ? '，兆声开' : ''}`;
+    yield* logStep(L, u, i, waitS(s.s));
   }
-  yield* rinseUpflow(L, 'ob2');
+  cb.mega = false;
 }
 
-// ---------- 减压干燥槽 ----------
-function* dryerSeq(L) {
-  const d = L.dr, R = L.R;
-  L.phase = '关上密封盖';
-  yield* anim(d, 'lid', 1, 3);
-  L.phase = 'N₂ 置换：把槽里的氧赶走';
-  d.n2On = true;
-  yield* until(() => d.o2 < 1, 180);
-  if (R.ipa) {
-    if (d.lid < 0.99 || d.o2 > 2) L.violate('盖子没关好或氧浓度没降下来就供 IPA');
-    L.phase = '水面上供 IPA，形成一层 IPA';
-    d.ipaOn = true;
-    yield* waitS(60);
+function* oneBathUnit(L, u) {
+  const n = u.steps.length;
+  for (let i = 0; i < n; i++) {
+    const s = u.steps[i], tag = stepTag(i, n);
+    if (s.kind === 'qdr') yield* logStep(L, u, i, qdrCycle(L, u.bath, s.T, `${tag}${s.T > 30 ? '热水' : '冷水'}快排冲洗`, !!s.shower));
+    else if (s.kind === 'upflow') yield* logStep(L, u, i, rinseUpflow(L, u.bath, s, tag));
+    else if (s.kind === 'inject') yield* logStep(L, u, i, injectStep(L, u.bath, s, tag));
   }
-  L.phase = `慢速提拉 ${R.liftMmS} mm/s：晶圆从水里穿过${R.ipa ? ' IPA 层' : '水面'}到气体层`;
+  L[u.bath].stop();
+}
+
+// 减压干燥槽：关盖 → 单元里的步骤 → 回到大气压 → 开盖。提拉结束时按"后面有没有减压"判定干燥的结果
+function* liftDry(L, mmS, vacuum, tag = '') {
+  const d = L.dr;
+  L.phase = `${tag}慢速提拉 ${mmS} mm/s：晶圆从水里穿过${d.ipaOn ? ' IPA 层' : '水面'}到气体层`;
   L.drying = true;
   d.lift = null;
-  yield* lifterTo(L, 'dr', 1, R.liftMmS / 1000, () => d.liftSample(R.liftMmS));
+  yield* lifterTo(L, 'dr', 1, mmS / 1000, () => d.liftSample(mmS));
   d.ipaOn = false;
-  L.surf.applyDrying(d.liftResult(), !!R.vacuum);
+  L.surf.applyDrying(d.liftResult(), vacuum);
   L.dried = true;
-  if (R.vacuum) { L.phase = '减压：残留的液体在低温下很快蒸发'; d.vacOn = true; yield* waitS(40); }
-  L.phase = 'N₂ 吹干';
-  yield* waitS(R.vacuum ? 60 : 180);
+}
+
+function* dryerUnit(L, u) {
+  const d = L.dr, n = u.steps.length, vacuum = u.steps.some(s => s.kind === 'vacuum');
+  let lifted = false;
+  L.phase = '关上密封盖';
+  yield* anim(d, 'lid', 1, 3);
+  for (let i = 0; i < n; i++) {
+    const s = u.steps[i], tag = stepTag(i, n);
+    let g;
+    if (s.kind === 'purge') g = (function* () { L.phase = `${tag}N₂ 置换：把槽里的氧赶走`; d.n2On = true; yield* until(() => d.o2 < 1, s.maxS); })();
+    else if (s.kind === 'ipa') g = (function* () {
+      if (d.lid < 0.99 || d.o2 > 2) L.violate('盖子没关好或氧浓度没降下来就供 IPA');
+      L.phase = `${tag}水面上供 IPA，形成一层 IPA`; d.ipaOn = true; yield* waitS(s.s);
+    })();
+    else if (s.kind === 'lift') { g = liftDry(L, s.mmS, vacuum, tag); lifted = true; }
+    else if (s.kind === 'vacuum') g = (function* () { L.phase = `${tag}减压：残留的液体在低温下很快蒸发`; d.vacOn = true; yield* waitS(s.s); })();
+    else if (s.kind === 'n2dry') g = (function* () { L.phase = `${tag}N₂ 吹干`; d.n2On = true; yield* waitS(s.s); })();
+    if (g) yield* logStep(L, u, i, g);
+  }
+  if (!lifted) { L.notes.push('干燥单元里没有"慢速提拉"，按 1 mm/s 提起来'); yield* liftDry(L, 1.0, vacuum); }
   d.vacOn = false;
   L.phase = '回到大气压';
   yield* until(() => d.pressure > 100, 60);
@@ -220,6 +246,8 @@ function* dryerSeq(L) {
   yield* anim(d, 'lid', 0, 3);
   L.drying = false;
 }
+
+const UNIT_RUN = { chembath: chemBathUnit, onebath: oneBathUnit, dryer: dryerUnit };
 
 // ---------- 药液槽换液（维护动作，没在跑批时才能做；给管路图演示阀门和联锁） ----------
 function* bathExchange(L, id) {
@@ -250,7 +278,8 @@ function* bathExchange(L, id) {
 }
 
 // ---------- 工艺步骤 ----------
-export const STEPS = [
+// 装载、取片、姿态变换、取出是固定的；中间按流程里的单元一个槽一个步骤（见 sim/recipe.js）
+const FIXED_HEAD = [
   {
     id: 'load', name: '晶圆盒到位、开门、映射', focus: 'loader',
     now: '两个 FOUP 放到装载口，FOUP 门和设备的门对接后一起打开，再逐个槽位扫描。',
@@ -278,85 +307,8 @@ export const STEPS = [
     why: '槽里的晶圆是竖着放的：液流从底部往上穿过片间，从溢流口流走；提出液面时水也能顺着往下流。',
     *run(L) { L.phase = '整批从水平转成竖直'; yield* anim(L.loader, 'posture', 1, 6); },
   },
-  {
-    id: 'spm', name: '药液槽 1：SPM，然后马上送进单槽 1', focus: 'cb1',
-    now: r => `机械手把整批送到药液槽 1，交给升降器浸进 SPM（${r.spmRatio} : 1，${r.spmT} °C），泡 ${r.spmMin} 分钟；提起来马上送进单槽 1。`,
-    why: 'SPM 把有机物和光刻胶残留氧化分解掉。药液从内槽溢流到外槽，泵经过滤器和加热器打回内槽底部：表面一直在更新，颗粒被过滤器拦下。晶圆提出来时带着一层高温、高浓度的药液，在空气里待久了会局部变干，所以要马上进单槽。',
-    *run(L) {
-      const R = L.R;
-      L.phase = '槽间搬送机械手到装载区接批';
-      yield* par(robotTo(L, P.X.loader, '移动到装载区'), lifterTo(L, 'cb1', 0.85));
-      yield* handoff(L, 'posture', 'robot');
-      L.phase = '送到药液槽 1';
-      yield* robotTo(L, P.X.cb1, '移动到药液槽 1');
-      yield* toTank(L, 'cb1');
-      L.phase = `SPM 浸泡 ${R.spmMin} min（${R.spmT} °C）`;
-      yield* waitS(R.spmMin * 60);
-      yield* fromTank(L, 'cb1', 'ob1');
-      L.phase = '马上送到单槽 1';
-      yield* transferTo(L, 'ob1');
-      yield* toTank(L, 'ob1');
-    },
-  },
-  {
-    id: 'rinse1', name: '单槽 1：快排冲洗 → 上流冲洗（机械手去洗夹爪）', focus: 'ob1',
-    now: r => `先用 ${r.hotT} °C 热水快排冲洗 ${r.ob1HotQdr} 次、冷水 ${r.ob1ColdQdr} 次，再上流冲洗到终点。同时机械手去夹爪清洗干燥位，把沾了 SPM 的夹爪洗干净、吹干。`,
-    why: '快排前期稀释得快：每排一次只剩约 2 % 的残液；后期上流更稳，从底部进水、溢流带走。硫酸黏、难冲，所以先用热水。比电阻前面一直很低，到最后才猛地升上去：比电阻和离子浓度成反比，浓度按指数下降。',
-    *run(L) { yield* par(rinseOb1(L), chuckClean(L)); },
-  },
-  {
-    id: 'sc1', name: '药液槽 2：SC1 + 兆声，然后马上送进单槽 2', focus: 'cb2',
-    now: r => `机械手从单槽 1 取出晶圆，送进药液槽 2 的 SC1（NH₄OH : H₂O₂ : H₂O = ${r.sc1Nh3} : 1 : ${r.sc1Water}，${r.sc1T} °C）泡 ${r.sc1Min} 分钟${r.mega ? '，开兆声' : ''}；提起来马上送进单槽 2。`,
-    why: 'H₂O₂ 氧化表面、NH₄OH 慢慢溶掉氧化层，把颗粒从底下掏松；碱性下颗粒和硅表面都带负电，互相排斥，不容易再粘回去。兆声（约 1 MHz）帮忙把小颗粒冲走。代价：硅也被刻掉一点，表面变粗糙；SC1 还会让 Fe 沉积到表面。',
-    *run(L) {
-      const R = L.R;
-      L.phase = '机械手到单槽 1';
-      yield* robotTo(L, P.X.ob1, '移动到单槽 1');
-      yield* fromTank(L, 'ob1', 'cb2');
-      L.phase = '送到药液槽 2';
-      yield* transferTo(L, 'cb2');
-      yield* toTank(L, 'cb2');
-      if (R.mega) { L.cb2.mega = true; L.cb2.megaP = R.megaP / 100; }
-      L.phase = `SC1 浸泡 ${R.sc1Min} min（${R.sc1T} °C）${R.mega ? '，兆声开' : ''}`;
-      yield* waitS(R.sc1Min * 60);
-      L.cb2.mega = false;
-      yield* fromTank(L, 'cb2', 'ob2');
-      L.phase = '马上送到单槽 2';
-      yield* transferTo(L, 'ob2');
-      yield* toTank(L, 'ob2');
-    },
-  },
-  {
-    id: 'rinse2', name: '单槽 2：快排冲洗 → 上流冲洗（机械手去洗夹爪）', focus: 'ob2',
-    now: r => `冷水快排冲洗 ${r.ob2Qdr} 次，再上流冲洗到终点。同时机械手去洗掉夹爪上的 SC1。`,
-    why: '后面要在同一个槽里进 HF：槽里还有氨水的话，会生成 NH₄F，所以先把 SC1 冲干净。',
-    *run(L) { yield* par(rinseOb2(L), chuckClean(L)); },
-  },
-  {
-    id: 'dhf', name: '单槽 2：DHF → 上流冲洗', focus: 'ob2',
-    now: r => `往 DIW 流里按 1 : ${r.dhfRatio} 注入 HF，注入 ${r.dhfS} s；停止注入，继续上流冲洗到终点。`,
-    why: '去掉 SC1 留下的化学氧化膜，表面变成 H 终端、疏水；嵌在氧化膜里的 Fe 也一起被带走。满槽边进边溢，浓度按 1 − e^(−t/τ) 爬升、冲洗时拖尾，刻蚀量要算整条浓度曲线的积分。HF 处理和冲洗之间晶圆不出液面，这是单槽的好处。',
-    *run(L) { yield* dhf(L); },
-  },
-  {
-    id: 'todr', name: '尽快送进减压干燥槽', focus: 'dr',
-    now: '机械手从单槽 2 取出晶圆，尽快送进减压干燥槽，浸进槽里的水。',
-    why: 'HF 之后是疏水面：一离开液面，水膜很快缩成水珠，水珠干了就是水痕。所以这段搬送也要快。',
-    *run(L) {
-      L.phase = '机械手到单槽 2';
-      yield* robotTo(L, P.X.ob2, '移动到单槽 2');
-      yield* fromTank(L, 'ob2', 'dr');
-      L.phase = '尽快送到减压干燥槽';
-      yield* transferTo(L, 'dr');
-      yield* toTank(L, 'dr');
-    },
-  },
-  {
-    id: 'dry', name: '减压干燥：IPA → 慢速提拉 → 减压 → N₂ 吹干（机械手去洗夹爪、吹干）', focus: 'dr',
-    now: r => `关盖、N₂ 置换${r.ipa ? '、水面上供 IPA' : ''}，升降器以 ${r.liftMmS} mm/s 把晶圆慢慢提起${r.vacuum ? '，再减压' : ''}、N₂ 吹干。同时机械手去洗夹爪、用 N₂ 吹干，准备取干片。`,
-    why: 'IPA 把图形缝里的水换掉，表面张力只有水的约 1/3，图形受到的毛细力跟着变小；贴着晶圆的弯月面里 IPA 浓度高、表面张力小，表面张力差把水拉回下面（Marangoni 效应）。提得太快水膜来不及被拉走。减压让残留液体在低温下很快蒸发，氧也少，不容易长水痕。IPA 可燃，所以先用 N₂ 把氧赶走才供 IPA。',
-    *run(L) { yield* par(dryerSeq(L), chuckClean(L)); },
-  },
+];
+const FIXED_TAIL = [
   {
     id: 'unload', name: '取出、转回水平、分回两个 FOUP', focus: 'loader',
     now: '机械手用干的夹爪从减压干燥槽取出干片，送回装载区；转回水平，分回两个 FOUP，关门。',
@@ -380,18 +332,88 @@ export const STEPS = [
   },
 ];
 
+// 每个单元为什么这样做（新人看的说明；按单元编号）
+const UNIT_WHY = {
+  spm: 'SPM 把有机物和光刻胶残留氧化分解掉。药液从内槽溢流到外槽，泵经加热器和过滤器打回内槽底部：表面一直在更新，颗粒被过滤器拦下。晶圆提出来时带着一层高温、高浓度的药液，在空气里待久了会局部变干，所以要马上进单槽。',
+  rinse1: '快排前期稀释得快：每排一次只剩约 2 % 的残液；后期上流更稳，从底部进水、溢流带走。硫酸黏、难冲，所以先用热水。比电阻前面一直很低，到最后才猛地升上去：比电阻和离子浓度成反比，浓度按指数下降。',
+  sc1: 'H₂O₂ 氧化表面、NH₄OH 慢慢溶掉氧化层，把颗粒从底下掏松；碱性下颗粒和硅表面都带负电，互相排斥，不容易再粘回去。兆声（约 1 MHz）帮忙把小颗粒冲走。代价：硅也被刻掉一点，表面变粗糙；SC1 还会让 Fe 沉积到表面。',
+  dhf: '后面要在同一个槽里进 HF：槽里还有氨水的话，会生成 NH₄F，所以先把 SC1 冲干净。去掉 SC1 留下的化学氧化膜，表面变成 H 终端、疏水；嵌在氧化膜里的 Fe 也一起被带走。满槽边进边溢，浓度按 1 − e^(−t/τ) 爬升、冲洗时拖尾，刻蚀量要算整条浓度曲线的积分。HF 处理和冲洗之间晶圆不出液面，这是单槽的好处。',
+  dry: 'HF 之后是疏水面：一离开液面，水膜很快缩成水珠，水珠干了就是水痕。所以这段搬送也要快。IPA 把图形缝里的水换掉，表面张力只有水的约 1/3，图形受到的毛细力跟着变小；贴着晶圆的弯月面里 IPA 浓度高、表面张力小，表面张力差把水拉回下面（Marangoni 效应）。提得太快水膜来不及被拉走。减压让残留液体在低温下很快蒸发，氧也少，不容易长水痕。IPA 可燃，所以先用 N₂ 把氧赶走才供 IPA。',
+};
+const TYPE_WHY = {
+  chembath: '药液槽的药液一直循环、保温、过滤，反复用；晶圆提出来时带着一层药液，要马上进下一个槽。',
+  onebath: '单槽在同一个槽里换液：快排前期稀释得快，上流后期更稳；注药时满槽边进边溢。',
+  dryer: 'IPA 把缝里的水换掉，慢速提拉让 Marangoni 效应把水膜拉走，减压让残留液体很快蒸发。',
+};
+
+// 把晶圆从现在的位置搬进 bath：从装载区来，或者从上一个单槽来
+function* bringTo(L, bath) {
+  const h = L.batch.holder;
+  if (h === 'posture') {
+    L.phase = '槽间搬送机械手到装载区接批';
+    yield* par(robotTo(L, P.X.loader, '移动到装载区'), lifterTo(L, bath, 0.85));
+    yield* handoff(L, 'posture', 'robot');
+    L.phase = `送到${NAME[bath]}`;
+    yield* robotTo(L, P.X[bath], `移动到${NAME[bath]}`);
+  } else if (TANKS.includes(h)) {
+    L.phase = `机械手到${NAME[h]}`;
+    yield* robotTo(L, P.X[h], `移动到${NAME[h]}`);
+    yield* fromTank(L, h, bath);
+    L.phase = bath === 'dr' ? '尽快送到减压干燥槽' : `送到${NAME[bath]}`;
+    yield* transferTo(L, bath);
+  }
+  yield* toTank(L, bath);
+}
+
+// 一个单元一个工艺步骤：晶圆不在这个槽里就先搬过来 → 跑单元的步骤（夹爪脏了同时去洗）→ 药液槽：提起来马上送进下一个槽
+function unitLineStep(R, i) {
+  const ids = R.flow.units, u = { id: ids[i], ...R.units[ids[i]] }, b = BATHS[u.bath];
+  const prev = i > 0 ? R.units[ids[i - 1]] : null, next = i + 1 < ids.length ? R.units[ids[i + 1]] : null;
+  const toNext = b.type === 'chembath' && next;
+  const chuck = (prev && BATHS[prev.bath].type === 'chembath') || b.type === 'dryer';   // 搬过药液 / 要取干片
+  let now;
+  if (b.type === 'chembath') now = `机械手把整批送进${b.name}，交给升降器浸进 ${describeCond(u)}：${describeSteps(u.steps)}${toNext ? `；提起来马上送进${BATHS[next.bath].name}` : ''}。`;
+  else if (b.type === 'onebath') now = `${describeSteps(u.steps)}。${chuck ? '同时机械手去夹爪清洗干燥位，把沾了药液的夹爪洗干净、吹干。' : ''}`;
+  else now = `${prev ? `机械手从${BATHS[prev.bath].name}取出晶圆，尽快送进减压干燥槽。` : ''}关盖，${describeSteps(u.steps)}，回到大气压、开盖。同时机械手去洗夹爪、用 N₂ 吹干，准备取干片。`;
+  return {
+    id: u.id, unit: u.id, focus: u.bath,
+    name: `${b.name}：${u.name}${toNext ? `，然后马上送进${BATHS[next.bath].name}` : ''}${chuck && b.type !== 'chembath' ? '（机械手去洗夹爪）' : ''}`,
+    now, why: UNIT_WHY[u.id] || TYPE_WHY[b.type],
+    *run(L) {
+      if (L.batch.holder !== u.bath) yield* bringTo(L, u.bath);
+      const clean = L.robot.chem || (b.type === 'dryer' && L.robot.wet);
+      const g = UNIT_RUN[b.type](L, u);
+      if (clean) yield* par(g, chuckClean(L)); else yield* g;
+      if (toNext) {
+        yield* fromTank(L, u.bath, next.bath);
+        L.phase = `马上送到${BATHS[next.bath].name}`;
+        yield* transferTo(L, next.bath);
+        yield* toTank(L, next.bath);
+      }
+    },
+  };
+}
+
+// 按配方的流程排出整批的工艺步骤
+export function lineSteps(R) {
+  return [...FIXED_HEAD, ...R.flow.units.map((_, i) => unitLineStep(R, i)), ...FIXED_TAIL];
+}
+
 // ---------- 整机 ----------
 export class Line {
-  constructor(recipe = {}) {
-    this.R = { ...DEFAULT, ...recipe };
+  constructor(recipe = DEFAULT) {
+    this.R = cloneRecipe(recipe);
+    this.facts = recipeFacts(this.R);
+    this.steps = lineSteps(this.R);     // 这一批的工艺步骤（按流程排出来）
     this.t = 0;
     this.robot = { x: P.X.loader, chuck: 1, holding: false, wet: false, chem: null, moving: false, task: '待机' };
     this.lift = { cb1: 0, ob1: 0, cb2: 0, ob2: 0, dr: 0 };   // 空着时停在下面，要交接时才升上来
     this.bg = [];                      // 后台动作（例如空升降器降回去）
     this.batch = { holder: 'foup' };   // foup / pick / posture / robot / cb1 / ob1 / cb2 / ob2 / dr
     this.loader = { door: 0, map: 0, pick1: 0, pick2: 0, posture: 0 };
-    this.cb1 = new ChemBath('SPM'); this.cb1.configure(this.R);
-    this.cb2 = new ChemBath('SC1'); this.cb2.configure(this.R);
+    // 药液槽的条件来自流程里用这个槽的单元
+    this.cb1 = new ChemBath('SPM'); this.cb1.configure((unitOfBath(this.R, 'cb1') || DEFAULT.units.spm).cond);
+    this.cb2 = new ChemBath('SC1'); this.cb2.configure((unitOfBath(this.R, 'cb2') || DEFAULT.units.sc1).cond);
     this.ob1 = new OneBath();
     this.ob2 = new OneBath();
     this.dr = new Dryer();
@@ -403,6 +425,7 @@ export class Line {
     this.wasExposed = { ob1: false, ob2: false };
     this.wetted = false; this.dried = false; this.drying = false;
     this.violations = []; this.notes = []; this.rinseLog = [];
+    this.stepLog = [];                 // 单元里每一步的开始、结束时间（配方页显示实际用了多久）
     this.stepIdx = -1; this.runner = null; this.stepT0 = 0; this.stepTimes = [];
     this.phase = '';
     this.task = null; this.lastTask = null; this.batchT0 = 0;
@@ -445,7 +468,7 @@ export class Line {
     if (i === 0) this.batchT0 = this.t;   // 这一批从这里开始计时（前面可能做过换液）
     this.stepIdx = i;
     this.stepT0 = this.t;
-    this.runner = STEPS[i].run(this);
+    this.runner = this.steps[i].run(this);
     this.runner.next(0);
   }
 
@@ -459,7 +482,7 @@ export class Line {
       if (this.task) { this.lastTask = this.task; this.task = null; }
       else {
         this.stepTimes[this.stepIdx] = this.t - this.stepT0;
-        if (this.stepIdx === STEPS.length - 1) this.done = true;
+        if (this.stepIdx === this.steps.length - 1) this.done = true;
       }
     }
     this.updateWafers(dt);
@@ -467,7 +490,7 @@ export class Line {
 
   // 一口气跑完全部步骤（测试和配方页的预览用）
   runAll(dt = 0.1) {
-    for (let i = 0; i < STEPS.length; i++) {
+    for (let i = 0; i < this.steps.length; i++) {
       this.startStep(i);
       while (this.busy) this.step(dt);
     }

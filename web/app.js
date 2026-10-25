@@ -7,10 +7,10 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { P, TANKS, STATION_NAME } from '../sim/params.js';
-import { Line, STEPS, simulate, PIPING } from '../sim/tool.js';
+import { Line, simulate, PIPING } from '../sim/tool.js';
 import { FLUID_NAME } from '../sim/piping.js';
 import { evaluate } from '../sim/result.js';
-import { DEFAULT, PRESETS, FIELDS, sameRecipe } from '../sim/recipe.js';
+import { DEFAULT, PRESETS, BATHS, STEP_KINDS, COND_FIELDS, newStep, cloneRecipe, sameRecipe, describeSteps } from '../sim/recipe.js';
 import { SURF, gammaMix, stressGPa } from '../sim/surface.js';
 import { initParts, ballValve, megaTransducer, megaGenerator, meter, resistivityProbe, rtdProbe, levelProbe, magPump, filterHousing, inlineHeater, flowControl, mixingBlock, nozzleRow, cable } from './parts3d.js';
 
@@ -605,7 +605,7 @@ const Q_V = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 
 if (has3D && !LOW) scene.traverse(o => { if (o.isMesh && !o.material.transparent) { o.castShadow = true; o.receiveShadow = true; } });
 
 // ================= 模拟 =================
-let R = { ...DEFAULT };
+let R = cloneRecipe(DEFAULT);      // 配方：流程 → 单元 → 步骤（sim/recipe.js）
 let L = new Line(R);
 let speed = 60, paused = false;
 const SIM_DT = 0.1;
@@ -979,9 +979,17 @@ const fmtTime = t => { const m = Math.floor(t / 60), s = Math.floor(t % 60); ret
 
 // ================= 运行页 =================
 const stepsEl = $('#steps');
-STEPS.forEach(s => { const li = document.createElement('li'); li.innerHTML = `<span>${s.name}</span><span class="d"></span>`; stepsEl.appendChild(li); });
+// 工艺步骤按配方的流程排出来（L.steps）；配方变了重排
+function buildStepList() {
+  const key = L.steps.map(s => s.name).join('|');
+  if (stepsEl.dataset.key === key) return;
+  stepsEl.dataset.key = key;
+  stepsEl.innerHTML = '';
+  L.steps.forEach(s => { const li = document.createElement('li'); li.innerHTML = `<span>${s.name}</span><span class="d"></span>`; stepsEl.appendChild(li); });
+}
 const nowText = st => (typeof st.now === 'function' ? st.now(L.R) : st.now);
 function renderSteps() {
+  buildStepList();
   [...stepsEl.children].forEach((li, i) => {
     const done = i < L.stepIdx || (i === L.stepIdx && !L.busy);
     li.className = done ? 'done' : i === L.stepIdx && L.busy ? 'cur' : '';
@@ -990,14 +998,12 @@ function renderSteps() {
   const go = $('#go');
   if (L.task) { go.textContent = `进行中：${L.task}（演示）…`; go.disabled = true; }
   else if (L.done) { go.textContent = '↻ 再跑一批'; go.disabled = false; }
-  else if (L.busy) { go.textContent = `进行中：${STEPS[L.stepIdx].name} …`; go.disabled = true; }
-  else { const n = STEPS[L.stepIdx + 1]; go.textContent = (L.stepIdx < 0 ? '▶ 开始：' : '▶ 下一步：') + n.name; go.disabled = false; }
+  else if (L.busy) { go.textContent = `进行中：${L.steps[L.stepIdx].name} …`; go.disabled = true; }
+  else { const n = L.steps[L.stepIdx + 1]; go.textContent = (L.stepIdx < 0 ? '▶ 开始：' : '▶ 下一步：') + n.name; go.disabled = false; }
   const st = $('#state');
   st.className = 'pill' + (L.busy || (L.stepIdx >= 0 && !L.done) ? ' run' : L.done ? ' ok' : '');
-  st.textContent = L.task ? '维护中' : L.done ? '完成' : L.stepIdx < 0 ? '待机' : L.busy ? `第 ${L.stepIdx + 1}/${STEPS.length} 步` : `等待第 ${L.stepIdx + 2} 步`;
-  const locked = L.busy || (L.stepIdx >= 0 && !L.done);
-  document.querySelectorAll('#fields input, #fields select, #presets button').forEach(el => { el.disabled = locked; });
-  $('#lockNote').hidden = !locked;
+  st.textContent = L.task ? '维护中' : L.done ? '完成' : L.stepIdx < 0 ? '待机' : L.busy ? `第 ${L.stepIdx + 1}/${L.steps.length} 步` : `等待第 ${L.stepIdx + 2} 步`;
+  syncRecipeLock();
 }
 function explain(title, now, why, err = false) {
   const ex = $('#explain');
@@ -1013,7 +1019,7 @@ function runStep(i) {
   clearTimeout(autoTimer);
   L.startStep(i);
   wasBusy = true;   // 很短的步骤在高倍速下可能一帧之内就做完，这里先记下"在忙"，完成才不会漏掉
-  const st = STEPS[i];
+  const st = L.steps[i];
   explain(`第 ${i + 1} 步 · ${st.name}`, nowText(st), st.why);
   lastFocus = null;
   if (follow()) { camTo(st.focus); lastFocus = st.focus; }
@@ -1089,51 +1095,142 @@ $('#again').addEventListener('click', () => { $('#result').hidden = true; resetA
 $('#tweak').addEventListener('click', () => { $('#result').hidden = true; resetAll(); showTab('recipe'); });
 $('#resClose').addEventListener('click', () => { $('#result').hidden = true; });
 
-// ================= 配方页 =================
-const presetsEl = $('#presets'), fieldsEl = $('#fields');
+// ================= 配方页：流程（flow）→ 单元（unit）→ 步骤（step） =================
+const presetsEl = $('#presets');
+let selUnit = DEFAULT.flow.units[0];
+let lastPred = null;                 // 最近一次预测跑出来的机台（拿它显示每一步实际用了多久）
+let lastLocked = null;
+const recipeLocked = () => L.busy || (L.stepIdx >= 0 && !L.done);
+const fmtS = s => (s >= 90 ? `${(s / 60).toFixed(1)} min` : `${Math.round(s)} s`);
+const dis = () => (recipeLocked() ? 'disabled' : '');
+
 function renderPresets() {
   presetsEl.innerHTML = '';
   for (const p of PRESETS) {
     const b = document.createElement('button');
     b.className = 'btn' + (sameRecipe(R, p.r) ? ' on' : '');
     b.textContent = p.name;
-    b.onclick = () => { R = { ...p.r }; syncFields(); applyRecipe(); };
+    b.disabled = recipeLocked();
+    b.onclick = () => { R = cloneRecipe(p.r); recipeChanged(true); };
     presetsEl.appendChild(b);
   }
 }
-for (const f of FIELDS) {
-  const d = document.createElement('div');
-  if (f.grp) { d.innerHTML = `<h4 class="fg">${f.grp}</h4>`; fieldsEl.appendChild(d); continue; }
-  if (f.type === 'toggle') {
-    d.className = 'field tg';
-    d.innerHTML = `<label class="chk"><input type="checkbox" data-k="${f.k}"> ${f.name}</label>${f.tip ? `<div class="tip">${f.tip}</div>` : ''}`;
-  } else if (f.type === 'select') {
-    d.className = 'field tg';
-    d.innerHTML = `<span>${f.name}</span><select data-k="${f.k}">${f.options.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select>`;
-  } else {
-    d.className = 'field';
-    d.innerHTML = `<div class="top"><span>${f.name}</span><b><span data-v="${f.k}"></span> ${f.unit}</b></div>
-      <input type="range" min="${f.min}" max="${f.max}" step="${f.step}" data-k="${f.k}">${f.tip ? `<div class="tip">${f.tip}</div>` : ''}`;
-  }
-  fieldsEl.appendChild(d);
+
+// 预测跑出来的时间：一个单元一共用了多久
+function unitTime(id) {
+  if (!lastPred) return null;
+  const recs = lastPred.stepLog.filter(r => r.unit === id && r.t1 != null);
+  return recs.length ? recs.reduce((a, r) => a + r.t1 - r.t0, 0) : null;
 }
-fieldsEl.addEventListener('input', e => {
-  const k = e.target.dataset.k;
-  if (!k) return;
-  R[k] = e.target.type === 'checkbox' ? (e.target.checked ? 1 : 0) : e.target.tagName === 'SELECT' ? e.target.value : +e.target.value;
-  syncFields(true);
-  applyRecipe();
-});
-function syncFields(fromInput = false) {
-  for (const f of FIELDS) {
-    if (f.grp) continue;
-    const el = fieldsEl.querySelector(`[data-k="${f.k}"]`);
-    if (!fromInput) { if (f.type === 'toggle') el.checked = !!R[f.k]; else el.value = R[f.k]; }
-    const v = fieldsEl.querySelector(`[data-v="${f.k}"]`);
-    if (v) v.textContent = R[f.k];
+function renderFlow() {
+  $('#flowName').textContent = R.flow.name;
+  $('#flow').innerHTML = R.flow.units.map((id, i) => {
+    const u = R.units[id], b = BATHS[u.bath], t = unitTime(id);
+    return `<li data-u="${id}" class="${id === selUnit ? 'on' : ''}" title="${describeSteps(u.steps)}"><b>${i + 1}</b><span class="bn">${b.name}</span><span class="un">${u.name}</span><span class="sm">${u.steps.length} 步${t != null ? ' · ' + fmtS(t) : ''}</span></li>`;
+  }).join('');
+  const ax = $('#airExtra');
+  ax.value = R.flow.airExtraS; ax.disabled = recipeLocked();
+  $('#airExtraV').textContent = R.flow.airExtraS;
+}
+
+// 一个输入项。path：'cond'（药液槽的条件）或者步骤的序号
+function fieldHtml(f, obj, path) {
+  const v = obj[f.k], d = dis(), at = `data-p="${path}" data-f="${f.k}" ${d}`;
+  if (f.type === 'toggle') return `<label class="chk sf"><input type="checkbox" ${at} ${v ? 'checked' : ''}>${f.name}</label>`;
+  if (f.type === 'select') return `<label class="sf">${f.name} <select ${at}>${f.options.map(([o, t]) => `<option value="${o}" ${o === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
+  return `<label class="sf">${f.name} <input type="number" min="${f.min}" max="${f.max}" step="${f.step}" value="${v}" ${at}>${f.unit ? `<i>${f.unit}</i>` : ''}</label>`;
+}
+const fieldsOf = (u, s) => STEP_KINDS[s.kind].fields.filter(f => (!f.need || BATHS[u.bath][f.need]) && (!f.when || f.when(s)));
+
+function renderUnit() {
+  const u = R.units[selUnit], b = BATHS[u.bath], d = dis();
+  $('#unitTitle').innerHTML = `单元（unit）<span class="sub">${b.name} · ${u.name}</span>`;
+  $('#unitCond').innerHTML = b.type === 'chembath'
+    ? `<div class="cond"><span class="lb">槽的条件</span>${COND_FIELDS[b.kind].map(f => fieldHtml(f, u.cond, 'cond')).join('')}</div>` : '';
+  $('#usteps').innerHTML = u.steps.map((s, i) => `<li data-i="${i}">
+      <div class="sh"><b>${i + 1}</b><span class="k">${STEP_KINDS[s.kind].name}</span><span class="act"></span>
+        <span class="ops"><button data-op="up" title="上移" ${i === 0 ? 'disabled' : d}>↑</button><button data-op="down" title="下移" ${i === u.steps.length - 1 ? 'disabled' : d}>↓</button><button data-op="del" title="删掉这一步" ${d}>✕</button></span></div>
+      <div class="sfs">${fieldsOf(u, s).map(f => fieldHtml(f, s, i)).join('')}</div></li>`).join('')
+    || '<li class="empty">这个单元没有步骤：晶圆放进去马上就拿出来。</li>';
+  $('#addKind').innerHTML = Object.entries(STEP_KINDS).filter(([, K]) => K.bath === b.type).map(([k, K]) => `<option value="${k}">${K.name}</option>`).join('');
+  $('#addKind').disabled = $('#addStep').disabled = recipeLocked();
+  $('#stepTip').textContent = '';
+  updateTimes();
+}
+
+// 预测跑完以后，只改时间的字，不重画输入框（免得正在输入的框失去焦点）
+function updateTimes() {
+  for (const li of $('#flow').children) {
+    const id = li.dataset.u, t = unitTime(id);
+    li.querySelector('.sm').textContent = `${R.units[id].steps.length} 步${t != null ? ' · ' + fmtS(t) : ''}`;
   }
+  const recs = lastPred ? lastPred.stepLog.filter(r => r.unit === selUnit && r.t1 != null) : [];
+  for (const li of $('#usteps').querySelectorAll('li[data-i]')) {
+    const r = recs.find(x => x.i === +li.dataset.i);
+    li.querySelector('.act').textContent = r ? `实际 ${fmtS(r.t1 - r.t0)}` : '';
+  }
+}
+
+// structural：步骤增删、换顺序、出现 / 消失输入项时才重画单元
+function recipeChanged(structural = false) {
   renderPresets();
+  renderFlow();
+  if (structural) renderUnit();
+  applyRecipe();
   schedulePredict();
+}
+$('#flow').addEventListener('click', e => {
+  const li = e.target.closest('li[data-u]');
+  if (!li) return;
+  selUnit = li.dataset.u;
+  renderFlow(); renderUnit();
+});
+$('#tab-recipe').addEventListener('change', e => {
+  const el = e.target, f = el.dataset.f;
+  if (!f || recipeLocked()) return;
+  const u = R.units[selUnit], obj = el.dataset.p === 'cond' ? u.cond : u.steps[+el.dataset.p];
+  let v = el.type === 'checkbox' ? (el.checked ? 1 : 0) : el.tagName === 'SELECT' ? el.value : +el.value;
+  if (el.type === 'number') {
+    if (!isFinite(v) || el.value === '') v = obj[f];
+    v = Math.min(+el.max, Math.max(+el.min, v));
+    el.value = v;
+  }
+  obj[f] = v;
+  recipeChanged(f === 'end');
+});
+$('#tab-recipe').addEventListener('focusin', e => {
+  const el = e.target, f = el.dataset.f;
+  if (!f) return;
+  const u = R.units[selUnit];
+  const defs = el.dataset.p === 'cond' ? COND_FIELDS[BATHS[u.bath].kind] : STEP_KINDS[u.steps[+el.dataset.p].kind].fields;
+  const def = defs.find(x => x.k === f);
+  $('#stepTip').textContent = def && def.tip ? def.tip : '';
+});
+$('#usteps').addEventListener('click', e => {
+  const op = e.target.dataset.op;
+  if (!op || recipeLocked()) return;
+  const i = +e.target.closest('li').dataset.i, st = R.units[selUnit].steps;
+  if (op === 'del') st.splice(i, 1);
+  else { const j = op === 'up' ? i - 1 : i + 1; [st[i], st[j]] = [st[j], st[i]]; }
+  recipeChanged(true);
+});
+$('#addStep').addEventListener('click', () => {
+  if (recipeLocked()) return;
+  R.units[selUnit].steps.push(newStep($('#addKind').value));
+  recipeChanged(true);
+});
+$('#airExtra').addEventListener('input', e => {
+  if (recipeLocked()) return;
+  R.flow.airExtraS = +e.target.value;
+  recipeChanged();
+});
+// 跑批中配方锁住；锁的状态变了才重画
+function syncRecipeLock() {
+  const locked = recipeLocked();
+  $('#lockNote').hidden = !locked;
+  if (locked === lastLocked) return;
+  lastLocked = locked;
+  renderPresets(); renderFlow(); renderUnit();
 }
 // 配方变了：没开始跑时，换一台新的机台状态
 function applyRecipe() { if (L.stepIdx < 0) { L = new Line(R); renderSteps(); } }
@@ -1141,12 +1238,14 @@ let predTimer = null;
 function schedulePredict() {
   clearTimeout(predTimer);
   predTimer = setTimeout(() => {
-    const ev = evaluate(simulate(R, 0.5));
+    lastPred = simulate(R, 0.5);
+    const ev = evaluate(lastPred);
     $('#predict').innerHTML = ev.items.map(i => `<li class="${i.ok ? 'ok' : 'bad'}"><div class="h"><span>${i.label}</span><span class="v">${i.val}</span></div></li>`).join('');
     $('#predictStats').textContent = ev.stats.join(' · ');
+    updateTimes();
   }, 250);
 }
-syncFields();
+renderPresets(); renderFlow(); renderUnit(); schedulePredict();
 
 // ================= 零件页 =================
 {
@@ -1499,8 +1598,8 @@ function frameBody(now) {
       $('#caption').innerHTML = `<b>${L.task}（演示）</b><span class="ph">${L.phase}</span>`;
       $('#explain .phase').textContent = '现在：' + L.phase;
     } else if (L.busy) {
-      const st = STEPS[L.stepIdx];
-      $('#caption').innerHTML = `<b>第 ${L.stepIdx + 1}/${STEPS.length} 步</b> · ${st.name}<span class="ph">${L.phase}${L.robot.task && L.robot.task !== '待机' && !L.robot.holding ? ' · 机械手：' + L.robot.task : ''}</span>`;
+      const st = L.steps[L.stepIdx];
+      $('#caption').innerHTML = `<b>第 ${L.stepIdx + 1}/${L.steps.length} 步</b> · ${st.name}<span class="ph">${L.phase}${L.robot.task && L.robot.task !== '待机' && !L.robot.holding ? ' · 机械手：' + L.robot.task : ''}</span>`;
       $('#explain .phase').textContent = '现在：' + L.phase;
     }
   }

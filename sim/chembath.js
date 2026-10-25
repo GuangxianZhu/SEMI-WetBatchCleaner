@@ -39,15 +39,10 @@ export class ChemBath {
     this.interlockLog = [];     // 联锁动作记录
   }
 
-  // SPM：H₂SO₄ : H₂O₂ = ratio : 1；SC1：NH₄OH : H₂O₂ : H₂O = nh3 : 1 : water
-  configure(R) {
-    if (this.kind === 'SPM') {
-      this.Tset = R.spmT;
-      this.parts = { DIW: 0, C1: R.spmRatio, C2: 1 };
-    } else {
-      this.Tset = R.sc1T;
-      this.parts = { DIW: R.sc1Water, C1: R.sc1Nh3, C2: 1 };
-    }
+  // 槽的条件（配方里药液槽单元的 cond）：SPM：H₂SO₄ : H₂O₂ = ratio : 1，温度 T；SC1：NH₄OH : H₂O₂ : H₂O = nh3 : 1 : water，温度 T
+  configure(cond) {
+    this.Tset = cond.T;
+    this.parts = this.kind === 'SPM' ? { DIW: 0, C1: cond.ratio, C2: 1 } : { DIW: cond.water, C1: cond.nh3, C2: 1 };
     this.T = this.Tset;
     this.c = this.mixConc();
   }

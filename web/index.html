@@ -146,6 +146,34 @@ h4.fg{margin:16px 0 0;font-size:13px;color:var(--accent);border-bottom:1px solid
 .predict{margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
 .predict h4{margin:0 0 6px;font-size:13px}
 .note{font-size:12px;color:var(--muted);margin-top:8px}
+h4.fg .sub{color:var(--fg);font-weight:600;margin-left:6px}
+.flow{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
+.flow li{display:grid;grid-template-columns:22px auto 1fr auto;align-items:center;gap:2px 8px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);cursor:pointer;font-size:13px;position:relative}
+.flow li+li::before{content:'↓';position:absolute;left:12px;top:-12px;font-size:10px;color:var(--muted)}
+.flow li b{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--line);font-size:11px}
+.flow li .bn{color:var(--muted);font-size:12px;white-space:nowrap}
+.flow li .sm{color:var(--muted);font-size:12px;font-family:var(--f-mono);white-space:nowrap}
+.flow li.on{border-color:var(--accent);background:var(--cur)}
+.flow li.on b{background:var(--accent);color:var(--accent-ink)}
+.cond{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;margin-top:8px;padding:6px 8px;border:1px dashed var(--line);border-radius:6px;font-size:13px}
+.cond .lb{color:var(--muted);font-size:12px;flex:1 1 100%}
+.usteps{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.usteps li{border:1px solid var(--line);border-radius:6px;padding:5px 8px;background:var(--panel)}
+.usteps li.empty{color:var(--muted);font-size:13px}
+.usteps .sh{display:flex;align-items:center;gap:8px;font-size:13px}
+.usteps .sh b{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:4px;background:var(--panel2);border:1px solid var(--line);font-size:11px}
+.usteps .sh .k{font-weight:600}
+.usteps .sh .act{color:var(--muted);font-size:12px;font-family:var(--f-mono)}
+.usteps .ops{margin-left:auto;display:flex;gap:2px}
+.usteps .ops button{border:1px solid var(--line);background:var(--panel2);border-radius:4px;width:24px;height:22px;cursor:pointer;font-size:12px;padding:0}
+.usteps .ops button:disabled{opacity:.35;cursor:default}
+.sfs{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:4px}
+.sf{font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.sf input[type=number]{width:64px;font:inherit;font-family:var(--f-mono);color:var(--fg);background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:2px 4px}
+.sf select,.addstep select{font:inherit;font-size:12px;color:var(--fg);background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:2px}
+.sf i{font-style:normal}
+.addstep{display:flex;gap:6px;align-items:center;margin-top:8px}
+#stepTip{font-size:12px;color:var(--muted);margin-top:6px;min-height:1.2em}
 
 .pgroup{margin-top:12px}
 .pgroup h4{margin:0 0 4px;font-size:13px;color:var(--muted)}
@@ -248,7 +276,16 @@ h4.fg{margin:16px 0 0;font-size:13px;color:var(--accent);border-bottom:1px solid
 
     <section class="tab" id="tab-recipe" hidden>
       <div class="presets" id="presets"></div>
-      <div id="fields"></div>
+      <h4 class="fg">流程（flow）<span class="sub" id="flowName"></span></h4>
+      <div class="note">整批走哪些槽、按什么顺序。现在固定是标准清洗；点一个单元，在下面改它的步骤。</div>
+      <ol class="flow" id="flow"></ol>
+      <div class="field"><div class="top"><span>机械手半路耽误（模拟故障）</span><b><span id="airExtraV"></span> s</b></div>
+        <input type="range" min="0" max="90" step="5" id="airExtra"><div class="tip">机械手被别的任务占住，晶圆在空气里待得更久</div></div>
+      <h4 class="fg" id="unitTitle"></h4>
+      <div id="unitCond"></div>
+      <ol class="usteps" id="usteps"></ol>
+      <div class="addstep"><select id="addKind"></select><button class="btn" id="addStep">＋ 加一步</button></div>
+      <div class="tip" id="stepTip"></div>
       <div class="lock" id="lockNote" hidden>运行中不能改配方，跑完再改。</div>
       <div class="predict"><h4>按这个配方跑一遍，结果会是：</h4><ul class="res small" id="predict"></ul><div class="stats" id="predictStats"></div>
         <div class="note">这是同一个简化模型从头到尾算一遍的结果：趋势对、数量级对，系数是估计值（见 docs/资料来源.md）。</div></div>
