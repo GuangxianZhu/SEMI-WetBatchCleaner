@@ -1,0 +1,13 @@
+{
+  "name": "semi-wetbatchcleaner",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"sim/test/*.test.js\"",
+    "build": "node tools/build_offline.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.0",
+    "three": "0.170.0"
+  }
+}
