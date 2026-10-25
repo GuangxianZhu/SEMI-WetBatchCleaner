@@ -12,6 +12,7 @@ import { FLUID_NAME } from '../sim/piping.js';
 import { evaluate } from '../sim/result.js';
 import { DEFAULT, PRESETS, FIELDS, sameRecipe } from '../sim/recipe.js';
 import { SURF, gammaMix, stressGPa } from '../sim/surface.js';
+import { initParts, ballValve, megaTransducer, megaGenerator, meter, resistivityProbe, rtdProbe, levelProbe, magPump, filterHousing, inlineHeater, flowControl, mixingBlock, nozzleRow, cable } from './parts3d.js';
 
 const $ = s => document.querySelector(s);
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
@@ -73,7 +74,7 @@ const controls = new OrbitControls(camera, canvas);
 controls.target.set(-0.6, 0.9, 0);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.49;
-controls.minDistance = 0.3;
+controls.minDistance = 0.12;
 controls.maxDistance = 12;
 
 const labelRenderer = new CSS2DRenderer();
@@ -104,7 +105,13 @@ const MAT = {
   foup: see(0x9fb2c4, 0.42),
   quartz: see(0xe6f3f9, 0.17),            // 石英槽
   glass: see(0xd8ecf5, 0.07),             // 机柜前板（透明时）
+  actuator: std(0xd3d8dc, 0.05, 0.45),    // 气动执行器外壳
+  indicator: std(0x9aa3ab, 0, 0.35),      // 阀门开关指示器（开 = 绿）
+  cable: std(0x2b3036, 0, 0.75),
+  electrode: std(0x8f979e, 0.65, 0.3),    // 比电阻计的电极（钛之类的金属）
+  glassTube: see(0xdff2fa, 0.35),         // 流量计的玻璃管
 };
+initParts(MAT);
 MAT.quartz.userData.pick = true;
 MAT.foup.userData.pick = true;
 MAT.glass.userData.noPick = true;
@@ -179,29 +186,29 @@ for (const [id, n, chem] of [['cb1', 1, 'SPM'], ['cb2', 2, 'SC1']]) {
   Object.assign(PART_INFO, {
     [`${id}_inner`]: [`药液槽 ${n} · 内槽`, g, `石英槽。晶圆泡在这里；药液从底部进、从顶部溢流到外槽。一个槽只用一种药（${chem}），药液循环反复用。`],
     [`${id}_outer`]: [`药液槽 ${n} · 外槽`, g, '接住内槽溢流出来的药液，给循环泵当缓冲。内槽表面一直在更新，浮上来的颗粒被溢流带走。'],
-    [`${id}_pump`]: [`药液槽 ${n} · 循环泵`, g, '外槽 → 加热器 → 过滤器 → 内槽底部，一直在转。放在最前面：吸入侧没有阻力件，热药液不容易汽蚀。外槽液位太低时停（联锁）。'],
-    [`${id}_filter`]: [`药液槽 ${n} · 过滤器`, g, '拦住溢流带走的颗粒；放在最后，也拦住泵和加热器掉出来的颗粒。压差升高说明堵了，要换（消耗件）。'],
-    [`${id}_heater`]: [`药液槽 ${n} · 加热器`, g, '把药液保持在设定温度。泵停了必须停：没有液体流过会空烧（联锁）。'],
-    [`${id}_valves`]: [`药液槽 ${n} · 阀门`, g, '供液阀 V1～V3：DIW、药液 1、药液 2，从上方进内槽；排液阀 V4（内槽）、V5（外槽）：换液时打开。绿色 = 开，灰色 = 关。'],
+    [`${id}_pump`]: [`药液槽 ${n} · 循环泵`, g, '磁力驱动泵：电机隔着泵壳用磁铁带动里面的叶轮，药液不经过轴封，不漏、不长颗粒。下面是 PFA 泵头，上面是电机。外槽 → 加热器 → 过滤器 → 内槽底部，一直在转；放在最前面，吸入侧没有阻力件，热药液不容易汽蚀。外槽液位太低时停（联锁）。'],
+    [`${id}_filter`]: [`药液槽 ${n} · 过滤器`, g, 'PFA 外壳里装着滤芯，下进上出，顶上有排气阀（把气泡排掉）。拦住溢流带走的颗粒；放在最后，也拦住泵和加热器掉出来的颗粒。压差升高说明堵了，要换滤芯（消耗件）。'],
+    [`${id}_heater`]: [`药液槽 ${n} · 加热器`, g, '管道加热器：药液从石英 / PFA 管里流过，外面是不锈钢外壳，上面是接线盒。把药液保持在设定温度。泵停了必须停：没有液体流过会空烧（联锁）。'],
+    [`${id}_valves`]: [`药液槽 ${n} · 阀门`, g, '气动球阀：通压缩空气，上面的执行器把阀杆转 90°，里面的球跟着转到开或关；接液部分是 PFA。供液阀 V1～V3：DIW、药液 1、药液 2，从上方进内槽；排液阀 V4（内槽）、V5（外槽）：换液时打开。顶上的指示器绿色 = 开，灰色 = 关。'],
     [`${id}_pipes`]: [`药液槽 ${n} · 管路`, g, '循环线：外槽 → 泵 → 加热器 → 过滤器 → 内槽底部；供液从上方进内槽；排液到酸 / 碱排液。正在流的管子按液体颜色显示；顶栏"管路图"看 2D 图。'],
     [`${id}_lifter`]: [`药液槽 ${n} · 升降器`, g, '接片、把晶圆浸下去、提上来；带槽的导杆托住 50 片的下边缘。空着时停在下面，要交接时才升上来。'],
-    [`${id}_sensors`]: [`药液槽 ${n} · 温度计 / 浓度计 / 液位计`, g, '监视温度、浓度、液位；浓度掉了就自动补液（阶段 3 做）。'],
+    [`${id}_sensors`]: [`药液槽 ${n} · 温度计 / 液位计 / 仪表`, g, '测温探头是 PFA 包覆的铂电阻（Pt100），伸进内槽、上端弯过槽沿；液位计插在外槽里（外槽液位低，泵要停）；前面的仪表实时显示温度。浓度计还没画（阶段 3 做按浓度补液）。'],
   });
 }
-PART_INFO.cb2_mega = ['药液槽 2 · 兆声振板', '药液槽 2（SC1）', '约 1 MHz 的声波（超声清洗是 20 ~ 200 kHz）。空化比超声弱得多、尺度小得多，帮忙把小颗粒冲走；功率太大会伤到细图形。'];
+PART_INFO.cb2_mega = ['药液槽 2 · 兆声振子 + 发生器', '药液槽 2（SC1）', '振子：压电陶瓷贴在振板背面，装在内槽底外侧，外面是不锈钢壳，侧面有电缆接头和冷却用的进出口。发生器（下面的方盒）输出约 1 MHz 的高频电，经电缆送到振子，屏幕显示开 / 关。约 1 MHz 的声波（超声清洗是 20 ~ 200 kHz），空化比超声弱得多、尺度小得多，帮忙把小颗粒冲走；功率太大会伤到细图形。'];
 for (const [id, n] of [['ob1', 1], ['ob2', 2]]) {
   const g = `单槽 ${n}`;
   Object.assign(PART_INFO, {
     [`${id}_tank`]: [`单槽 ${n} · 槽体`, g, '石英槽。同一个槽里换液：低浓度药液处理、纯水上流冲洗都在这里做，每批现配、用完排掉。'],
     [`${id}_pan`]: [`单槽 ${n} · 接液槽`, g, '把槽围起来的外槽。两侧的溢流和快排的水都落到这里，再从一根排液管出去，按液体切到酸排液 / 碱排液 / DIW 回收。'],
     [`${id}_inlet`]: [`单槽 ${n} · 槽底进液分配管`, g, 'DIW（和注进去的药）从槽底后角进来，沿两条长边往片间送，从顶部溢流走（上流）。'],
-    [`${id}_shower`]: [`单槽 ${n} · 淋浴喷嘴`, g, '快排时喷水，让晶圆保持湿润，防止液面降下去时弯月面把图形拉倒；快排后补水时一直喷到晶圆重新浸没。'],
+    [`${id}_shower`]: [`单槽 ${n} · 淋浴喷嘴`, g, '槽口两侧各一根管，下面一排小喷嘴斜着往晶圆上喷。快排时喷水，让晶圆保持湿润，防止液面降下去时弯月面把图形拉倒；快排后补水时一直喷到晶圆重新浸没。'],
     [`${id}_mix`]: [`单槽 ${n} · 混合块`, g, '冷 / 热 DIW 汇合后从这里穿过，HF、HCl、NH₄OH、H₂O₂（大 / 小流量两路）的注入阀插在后面，按比例把原液注进去。槽里浓度 = 原液流量 ÷ 总流量；满槽注药时浓度按 1 − e^(−t/τ) 爬升。'],
-    [`${id}_fcv`]: [`单槽 ${n} · 流量控制`, g, '冷 DIW、热 DIW 各一个阀，汇合以后经过这里（流量计 + 流量调节），把进槽的总流量控制在设定值，再进混合块。SPM 之后先用热水冲：硫酸黏、难冲。'],
-    [`${id}_valves`]: [`单槽 ${n} · 阀门`, g, 'V1 冷 DIW、V2 热 DIW、V3～V7 注入阀、V8 淋浴、V9 快排（大口径，在槽底侧面）、V10～V12 排液分流（酸 / 碱 / 回收）。绿色 = 开，灰色 = 关。'],
+    [`${id}_fcv`]: [`单槽 ${n} · 流量控制`, g, '冷 DIW、热 DIW 各一个阀，汇合以后经过这里：下面是带浮子的玻璃管流量计（浮子越高流量越大），上面是流量调节阀（侧面旋钮），把进槽的总流量控制在设定值，再进混合块。SPM 之后先用热水冲：硫酸黏、难冲。'],
+    [`${id}_valves`]: [`单槽 ${n} · 阀门`, g, '气动球阀：通压缩空气，上面的执行器把阀杆转 90°，里面的球跟着转到开或关；接液部分是 PFA。V1 冷 DIW、V2 热 DIW、V3～V7 注入阀、V8 淋浴、V9 快排（大口径，在槽底侧面）、V10～V12 排液分流（酸 / 碱 / 回收）。顶上的指示器绿色 = 开，灰色 = 关。'],
     [`${id}_pipes`]: [`单槽 ${n} · 管路`, g, '冷 / 热 DIW 先汇合，经流量控制从下往上穿过混合块，从槽底进槽；溢流、快排落进接液槽，再分到酸 / 碱 / 回收（快排不进回收）。正在流的管子按液体颜色显示；顶栏"管路图"看 2D 图。'],
-    [`${id}_mega`]: [`单槽 ${n} · 兆声振板`, g, '槽底、进液口旁边。约 1 MHz，帮忙把小颗粒冲走。这一版的配方在单槽里不开。'],
-    [`${id}_res`]: [`单槽 ${n} · 比电阻计 / 温度计`, g, '都装在槽里。比电阻判断冲洗干不干净：25 °C 纯水是 18.18 MΩ·cm，离子越多越低；冲到 ≥ 10 MΩ·cm 以后再溢流 30 s，排水才切到回收。'],
+    [`${id}_mega`]: [`单槽 ${n} · 兆声振子 + 发生器`, g, '振子贴在槽底外侧、进液口旁边（压电陶瓷贴在振板背面，外面是不锈钢壳）；发生器在接液槽下面，电缆穿过接液槽底接过去，屏幕显示开 / 关。约 1 MHz，帮忙把小颗粒冲走。这一版的配方在单槽里不开。'],
+    [`${id}_res`]: [`单槽 ${n} · 比电阻计 / 测温探头 / 仪表`, g, '都装在槽里（作者确认）。比电阻计是 PFA 护套的长杆，下端是同心的两个电极（中心一根、外面一圈），测两极之间的电阻；测温探头是 PFA 包覆的铂电阻，上端弯过槽沿。前面的仪表实时显示比电阻和温度。25 °C 纯水是 18.18 MΩ·cm，离子越多越低；冲到 ≥ 10 MΩ·cm 以后再溢流 30 s，排水才切到回收。'],
     [`${id}_lifter`]: [`单槽 ${n} · 升降器`, g, '同药液槽的升降器。'],
   });
 }
@@ -334,26 +341,39 @@ const FLUID_COL = {
   DIW: 0x3d9fe6, HDIW: 0xf08a50, RA: 0xe8d39a, RK: 0xb3e0c0, gas: 0xb0b8c0,
 };
 const PIPE_IDLE = 0xebe8de, VALVE_OPEN = 0x2fa36b, VALVE_SHUT = 0x9aa3ab;
+const place = (obj, p) => { obj.position.set(...p); return obj; };
+// 阀门所在那段管子的方向：上游管的末端 → 下游管的起点
+function valveAxis(t, nid) {
+  const ein = t.edges.find(e => e.b === nid && e.r3), eout = t.edges.find(e => e.a === nid && e.r3);
+  const a = ein ? ein.r3[ein.r3.length - 1] : t.p3[nid], b = eout ? eout.r3[0] : t.p3[nid];
+  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  return Math.hypot(...d) > 1e-6 ? d : [1, 0, 0];
+}
 function buildPiping3D(id, x) {
   const t = PIPING.templates.find(tt => tt.id === id);
   const at = p => [x + p[0], p[1], p[2]];
+  const out = {};
   for (const nid in t.nodes) {
     const n = t.nodes[nid];
     if (!t.p3[nid]) continue;
-    const [px, py, pz] = at(t.p3[nid]), sz = t.size3 && t.size3[nid];
-    if (n.kind === 'pump') addPart(`${id}_pump`, group(cylY(0.06, 0.08, MAT.pump, px, py, pz), cylY(0.045, 0.12, MAT.pump, px, py + 0.1, pz)));
-    else if (n.kind === 'heater') addPart(`${id}_heater`, box(0.22, 0.1, 0.12, MAT.heater, px, py, pz));
-    else if (n.kind === 'filter') addPart(`${id}_filter`, group(cylY(0.05, 0.3, MAT.filter, px, py, pz), cylY(0.055, 0.03, MAT.resin, px, py + 0.16, pz)));
-    else if (n.kind === 'mixer') addPart(`${id}_mix`, box(...sz, MAT.resin, px, py, pz));
-    else if (n.kind === 'unit') addPart(`${id}_${n.part3 || 'units'}`, box(...sz, MAT.panel, px, py, pz));
-    else if (n.kind === 'device') addPart(`${id}_mega`, box(...sz, MAT.mega, px, py, pz));
-    else if (n.kind === 'junction') addPart(`${id}_pipes`, mesh(new THREE.SphereGeometry(0.017, 12, 8), MAT.resin, px, py, pz));
+    const pos = at(t.p3[nid]), sz = t.size3 && t.size3[nid];
+    if (n.kind === 'pump') addPart(`${id}_pump`, place(magPump(), pos));
+    else if (n.kind === 'heater') addPart(`${id}_heater`, place(inlineHeater(0.22), pos));
+    else if (n.kind === 'filter') addPart(`${id}_filter`, place(filterHousing(0.3), pos));
+    else if (n.kind === 'mixer') addPart(`${id}_mix`, place(mixingBlock(...sz), pos));
+    else if (n.kind === 'unit') addPart(`${id}_${n.part3 || 'units'}`, place(n.part3 === 'fcv' ? flowControl(sz[1]) : box(...sz, MAT.panel), pos));
+    else if (n.kind === 'device') {
+      // 兆声振子：贴在槽底外侧，电缆接头朝发生器那边（−X）
+      const tr = megaTransducer(sz[0], sz[2], -1);
+      addPart(`${id}_mega`, place(tr.g, [pos[0], pos[1] + sz[1] / 2, pos[2]]));
+      out.megaPort = [pos[0] + tr.port[0], pos[1] + sz[1] / 2 + tr.port[1], pos[2] + tr.port[2]];
+    }
+    else if (n.kind === 'junction') addPart(`${id}_pipes`, mesh(new THREE.SphereGeometry(0.017, 12, 8), MAT.resin, ...pos));
     else if (n.kind === 'valve') {
-      // 执行器默认朝上；竖管上的阀朝前（act3: 'z'），免得顶到上面的管子
-      const s = n.big ? 0.06 : 0.04, d = s / 2 + 0.02, dir = (t.act3 && t.act3[nid]) || 'y';
-      const act = dir === 'z' ? cylZ(0.02, 0.04, MAT.steel, px, py, pz + d) : cylY(0.02, 0.04, MAT.steel, px, py + d, pz);
-      addPart(`${id}_valves`, group(box(s, s, s, MAT.resin, px, py, pz), act));
-      VALVE3D[nid] = act;
+      // 气动球阀：阀体顺着管子；执行器默认朝上，竖管上的阀朝前（act3: 'z'），免得顶到上面的管子
+      const v = ballValve(n.big ? 0.06 : 0.04, valveAxis(t, nid), (t.act3 && t.act3[nid]) === 'z' ? [0, 0, 1] : [0, 1, 0]);
+      addPart(`${id}_valves`, place(v.g, pos));
+      VALVE3D[nid] = v.ind;
     }
   }
   const big = nid => t.nodes[nid] && t.nodes[nid].big;
@@ -367,10 +387,15 @@ function buildPiping3D(id, x) {
   for (const e of t.edges) if (e.r3 && e.sys === 'supply' && PIPING.nodes[e.b].kind === 'tank') { const p = at(e.r3[e.r3.length - 1]); addPart(`${id}_pipes`, cylY(0.012, 0.03, MAT.resin, p[0], p[1] - 0.01, p[2])); }
   for (const e of t.edges) if (e.r3 && e.a.startsWith('src.')) { const p = at(e.r3[0]); addPart(`${id}_pipes`, cylZ(0.02, 0.012, MAT.steel, p[0], p[1], p[2])); }
   for (const [hy, hz, len] of t.hdr3) addPart(`${id}_pipes`, cylX(0.016, len, MAT.resin, x, hy, hz));
+  return out;
 }
 function updatePiping3D(pip) {
   for (const eid in PIPE3D) PIPE3D[eid].material.color.setHex(pip.flows[eid] ? FLUID_COL[pip.flows[eid]] : PIPE_IDLE);
   for (const vid in VALVE3D) VALVE3D[vid].material.color.setHex(pip.state.open[vid] ? VALVE_OPEN : VALVE_SHUT);
+  // 仪表、发生器的屏幕（只在读数变了时重画）
+  for (const id of ['ob1', 'ob2']) { ST[id].meter.lcd.set([`${fmtRho(L[id].rho)} MΩ·cm`, `${L[id].T.toFixed(1)} °C`]); ST[id].gen.set(['兆声 OFF', '']); }
+  for (const id of ['cb1', 'cb2']) ST[id].meter.lcd.set([`${L[id].T.toFixed(1)} °C`, `设定 ${L[id].Tset} °C`]);
+  ST.cb2.gen.set(L.cb2.mega ? ['兆声 ON', `${Math.round(L.cb2.megaP * 100)} %  1 MHz`] : ['兆声 OFF', '']);
   // 单槽：接液槽底有液体在走、两侧溢流的水膜
   for (const id of ['ob1', 'ob2']) {
     const s = ST[id], t = PIPING.templates.find(tt => tt.id === id);
@@ -395,6 +420,7 @@ function makeLifter(id, x) {
   return g;
 }
 
+const MX = 0.29;   // 槽旁边仪表的 X 偏移（两个槽之间的空当）
 function buildChemBath(id, x, kind) {
   const s = ST[id] = { x };
   const t = quartzTank(IL, IW, IH);
@@ -421,9 +447,22 @@ function buildChemBath(id, x, kind) {
   scene.add(s.outerLiq);
   // 循环线、供液、排液：按 sim/piping.js 的同一份数据生成（和 2D 管路图一致）
   buildPiping3D(id, x);
-  addPart(`${id}_sensors`, group(cylY(0.006, 0.42, MAT.resin, x + IL / 2 - 0.02, Y_TOP - 0.15, IW / 2 - 0.02), cylY(0.006, 0.36, MAT.steel, x + IL / 2 - 0.045, Y_TOP - 0.12, IW / 2 - 0.02)));
+  // 测温探头伸进内槽前右角、弯过槽沿；液位计插在外槽里；前面的仪表显示温度
+  const rtd = rtdProbe(0.28, 0.1);
+  addPart(`${id}_sensors`, place(rtd.g, [x + IL / 2 - 0.02, Y_TOP + 0.02, IW / 2 - 0.02]));
+  addPart(`${id}_sensors`, place(levelProbe(0.1), [x - IL / 2 - 0.028, Y_TOP + 0.03, IW / 2 - 0.03]));
+  s.meter = meter();
+  addPart(`${id}_sensors`, place(s.meter.g, [x + MX, CAB_Y, 0.29]));      // 放在两个槽之间的前面，不挡槽里
+  addPart(`${id}_sensors`, cable([[x + IL / 2 - 0.02, Y_TOP - 0.003, IW / 2 + 0.095], [x + IL / 2 - 0.02, CAB_Y, IW / 2 + 0.095]]));
   if (kind === 'SC1') {
-    addPart(`${id}_mega`, group(box(0.3, 0.025, 0.3, MAT.mega, x, Y_BOTTOM - 0.02, 0), box(0.14, 0.12, 0.12, MAT.dark, x - 0.15, 0.45, -0.15)));
+    // 兆声：振子贴在内槽底外侧，电缆接到下面的发生器
+    const tr = megaTransducer(0.3, 0.3, -1);
+    addPart(`${id}_mega`, place(tr.g, [x, Y_BOTTOM - 0.007, 0]));
+    const gen = megaGenerator(0.14, 0.12, 0.12);
+    addPart(`${id}_mega`, place(gen.g, [x - 0.15, 0.45, -0.15]));
+    s.gen = gen.lcd;
+    const pt = [x + tr.port[0], Y_BOTTOM - 0.007 + tr.port[1], 0];
+    addPart(`${id}_mega`, cable([pt, [x - 0.19, pt[1], 0], [x - 0.19, 0.53, 0], [x - 0.19, 0.53, -0.15], [x - 0.19, 0.51, -0.15]]));
     s.rings = [0, 1, 2].map(i => {
       const r = new THREE.Mesh(new THREE.RingGeometry(0.08, 0.1, 40), see(0xffffff, 0.0));
       r.rotation.x = -Math.PI / 2;
@@ -467,12 +506,25 @@ function buildOneBath(id, x) {
   // 槽底进液分配管：进液口在槽底后角，沿两条长边往片间送液
   addPart(`${id}_inlet`, group(cylX(0.009, 0.3, MAT.resin, x, Y_BOTTOM + 0.012, -0.155), cylX(0.009, 0.3, MAT.resin, x, Y_BOTTOM + 0.012, 0.155), cylZ(0.009, 0.31, MAT.resin, x - 0.15, Y_BOTTOM + 0.012, 0)));
   addPart(`${id}_shower`, group(cylX(0.009, 0.34, MAT.resin, x, Y_TOP + 0.07, IW / 2 + 0.03), cylX(0.009, 0.34, MAT.resin, x, Y_TOP + 0.07, -IW / 2 - 0.03),
-    cylZ(0.009, IW + 0.06, MAT.resin, x - 0.17, Y_TOP + 0.07, 0)));
-  addPart(`${id}_mega`, box(0.1, 0.08, 0.1, MAT.dark, x - 0.2, 0.42, 0.12));     // 兆声发生器（振板按管路数据画）
-  addPart(`${id}_res`, group(cylY(0.007, 0.3, MAT.resin, x + IL / 2 - 0.02, Y_TOP - 0.1, IW / 2 - 0.02), box(0.06, 0.05, 0.04, MAT.dark, x + IL / 2 - 0.02, Y_TOP + 0.07, IW / 2 - 0.02),
-    cylY(0.006, 0.3, MAT.steel, x + IL / 2 - 0.02, Y_TOP - 0.1, -IW / 2 + 0.05)));
-  // 冷 / 热 DIW、注药、淋浴、快排、排液分流：按 sim/piping.js 的同一份数据生成（和 2D 管路图一致）
-  buildPiping3D(id, x);
+    cylZ(0.009, IW + 0.06, MAT.resin, x - 0.17, Y_TOP + 0.07, 0),
+    place(nozzleRow(7, 0.045, -1), [x, Y_TOP + 0.07, IW / 2 + 0.03]), place(nozzleRow(7, 0.045, 1), [x, Y_TOP + 0.07, -IW / 2 - 0.03])));
+  // 比电阻计、测温探头都在槽里（作者确认）；前面的仪表显示比电阻和温度
+  const res = resistivityProbe(0.34);
+  addPart(`${id}_res`, place(res.g, [x + IL / 2 - 0.02, Y_TOP + 0.085, IW / 2 - 0.02]));
+  const rtd = rtdProbe(0.26, 0.1);
+  addPart(`${id}_res`, place(rtd.g, [x - IL / 2 + 0.02, Y_TOP + 0.02, IW / 2 - 0.02]));
+  s.meter = meter();
+  addPart(`${id}_res`, place(s.meter.g, [x + MX, CAB_Y, 0.29]));
+  const rp = [x + IL / 2 - 0.02 + res.cablePort[0], Y_TOP + 0.085 + res.cablePort[1], IW / 2 - 0.02];
+  addPart(`${id}_res`, cable([rp, [x + MX + 0.0224, rp[1], rp[2]], [x + MX + 0.0224, rp[1], 0.276]]));     // 接到仪表背面
+  addPart(`${id}_res`, cable([[x - IL / 2 + 0.02, Y_TOP - 0.003, IW / 2 + 0.095], [x - IL / 2 + 0.02, CAB_Y, IW / 2 + 0.095]]));
+  // 冷 / 热 DIW、注药、淋浴、快排、排液分流、兆声振子：按 sim/piping.js 的同一份数据生成（和 2D 管路图一致）
+  const pp = buildPiping3D(id, x);
+  // 兆声发生器在接液槽下面，电缆穿过接液槽底接到振子
+  const gen = megaGenerator(0.1, 0.08, 0.1);
+  addPart(`${id}_mega`, place(gen.g, [x - 0.2, 0.42, 0.12]));
+  s.gen = gen.lcd;
+  if (pp.megaPort) addPart(`${id}_mega`, cable([pp.megaPort, [x - 0.175, pp.megaPort[1], 0], [x - 0.175, 0.44, 0], [x - 0.175, 0.44, 0.07]]));
   s.lifter = makeLifter(id, x);
   s.bubbles = makePoints(130, 0xffffff, 0.006, 0.6);
   s.shower = makePoints(120, 0x9fd8ff, 0.007, 0.8);
@@ -1107,7 +1159,7 @@ syncFields();
     d.innerHTML = `<h4>${grp}</h4><div class="plist">${list.map(p => `<button data-p="${p.id}">${p.name.replace(/^.* · /, '')}</button>`).join('')}</div>`;
     pl.appendChild(d);
   }
-  pl.addEventListener('click', e => { const id = e.target.dataset.p; if (id) selectPart(id, true); });
+  pl.addEventListener('click', e => { const id = e.target.dataset.p; if (id) { pickedRoot = null; selectPart(id, true); } });
 }
 let selected = null;
 function setHL(id, on) {
@@ -1135,6 +1187,20 @@ function selectPart(id, fromList = false) {
   }
 }
 $('#pcClose').addEventListener('click', () => selectPart(null));
+// 拉近看：在 3D 里点中的是哪一个就看哪一个（例如某一个阀）；从列表选的就把这一类全框进来
+let pickedRoot = null;
+function zoomToPart() {
+  if (!selected || !PARTS[selected]) return;
+  const objs = pickedRoot && PARTS[selected].objs.includes(pickedRoot) ? [pickedRoot] : PARTS[selected].objs;
+  const bb = new THREE.Box3();
+  objs.forEach(o => bb.expandByObject(o));
+  const c = bb.getCenter(new THREE.Vector3()), size = bb.getSize(new THREE.Vector3()).length();
+  const dir = new THREE.Vector3(0.45, 0.35, 1).normalize();
+  $('#follow').checked = false;      // 不然镜头跟随会把镜头拉回去
+  camAnim = { p0: camera.position.clone(), t0: controls.target.clone(), p1: c.clone().addScaledVector(dir, Math.max(0.16, size * 1.3)), t1: c, k: 0 };
+  document.querySelectorAll('#views button').forEach(b => b.classList.remove('on'));
+}
+$('#pcZoom').addEventListener('click', zoomToPart);
 
 // ---------- 页签、顶栏 ----------
 function showTab(name) {
@@ -1161,6 +1227,8 @@ canvas.addEventListener('pointerup', e => {
     const m = o.material;
     if (m.userData.noPick || (m.transparent && m.opacity < 0.3 && !m.userData.pick)) continue;
     if (!o.userData.part) continue;
+    pickedRoot = o;
+    while (pickedRoot.parent && pickedRoot.parent !== scene) pickedRoot = pickedRoot.parent;
     selectPart(o.userData.part);
     return;
   }
