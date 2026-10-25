@@ -17,3 +17,5 @@
 - 写程序要带 Windows 一键启动 `启动.bat`：只写 ASCII、CRLF；先检查 main 的更新（`git pull --ff-only origin main`），没网或冲突时照样用本地版本启动。
 - 物理做到"趋势对、数量级对"，标明公认结论 / 估计参数，写清楚模型什么时候不准。
 - `sim/` 只算数、不碰界面，能用 `node --test` 单独测。
+- 常用命令（仓库根目录）：`npm install`（第一次）、`npm test`（单元测试）、`npm run build`（重新生成 `output/槽式清洗机_离线版.html`）。改了 `sim/` 或 `web/` 都要重新打包，离线版要一起提交。
+- 改了模型系数以后，`npm test` 要保证：标准配方全部合格，每个错误配方错在它该错的那一项。

@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>槽式清洗机</title>
+<style>
+:root{
+  --bg:#eef2f5; --stage1:#dfe6ea; --stage2:#97a3ad; --panel:#ffffff; --panel2:#f4f7f9;
+  --fg:#18212b; --muted:#5b6875; --line:#d4dce2;
+  --accent:#0f7cb4; --accent-ink:#ffffff; --ok:#1f8a4c; --bad:#c43c3c; --warn:#b87400; --cur:#e6f3fa;
+  --chart-bg:#f7fafc; --grid:#e1e7ec;
+  --f-cn:"Microsoft YaHei","PingFang SC","Noto Sans SC","Hiragino Sans GB",system-ui,sans-serif;
+  --f-mono:Consolas,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0f1418; --stage1:#1a2229; --stage2:#0c1014; --panel:#151b21; --panel2:#1c242b;
+  --fg:#e2e8ee; --muted:#97a4b0; --line:#2a333c;
+  --accent:#48ade4; --accent-ink:#04131c; --ok:#4cc27f; --bad:#ef6b6b; --warn:#e3a43a; --cur:#14283a;
+  --chart-bg:#11171c; --grid:#232c34; color-scheme:dark }}
+:root[data-theme="dark"]{
+  --bg:#0f1418; --stage1:#1a2229; --stage2:#0c1014; --panel:#151b21; --panel2:#1c242b;
+  --fg:#e2e8ee; --muted:#97a4b0; --line:#2a333c;
+  --accent:#48ade4; --accent-ink:#04131c; --ok:#4cc27f; --bad:#ef6b6b; --warn:#e3a43a; --cur:#14283a;
+  --chart-bg:#11171c; --grid:#232c34; color-scheme:dark }
+
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--f-cn);-webkit-font-smoothing:antialiased}
+button,select,input{font:inherit;color:inherit}
+#app{display:grid;grid-template-columns:minmax(0,1fr) 380px;grid-template-rows:auto minmax(0,1fr);height:100vh}
+
+header{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:16px;margin:0;font-weight:700;white-space:nowrap}
+.pill{display:inline-block;padding:2px 10px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);font-size:13px;white-space:nowrap}
+.pill.run{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.pill.ok{background:var(--ok);color:#fff;border-color:var(--ok)}
+.grp{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.grp .lbl{color:var(--muted);font-size:13px}
+.seg button{border:1px solid var(--line);background:var(--panel2);padding:3px 9px;cursor:pointer;margin-left:-1px;font-size:13px}
+.seg button:first-child{border-radius:6px 0 0 6px;margin-left:0}
+.seg button:last-child{border-radius:0 6px 6px 0}
+.seg button.on{background:var(--fg);color:var(--panel);border-color:var(--fg)}
+label.chk{display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;white-space:nowrap}
+#time{font-family:var(--f-mono)}
+
+#stage{position:relative;overflow:hidden;background:radial-gradient(120% 90% at 50% 30%,var(--stage1),var(--stage2) 75%)}
+#c{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none}
+.labels{position:absolute;inset:0;pointer-events:none;z-index:0}
+#caption,#partcard,#dock,#dockToggle{z-index:1}
+#dock[hidden],#partcard[hidden]{display:none}
+.no3d{position:absolute;inset:auto 12px 50% 12px;transform:translateY(50%);background:var(--panel);border:1px solid var(--bad);border-radius:8px;padding:10px 12px;font-size:13px;z-index:2}
+#jserr{position:fixed;left:8px;right:8px;bottom:8px;z-index:20;background:#7a1d1d;color:#fff;border-radius:8px;padding:10px 12px;font-size:13px;white-space:pre-wrap;word-break:break-all}
+.lab{font-size:12px;padding:1px 7px;border-radius:4px;background:color-mix(in srgb,var(--panel) 85%,transparent);border:1px solid var(--line);color:var(--fg);white-space:nowrap}
+.lab.main{border-color:var(--accent);color:var(--accent);font-weight:700}
+
+#caption{position:absolute;top:12px;left:50%;transform:translateX(-50%);max-width:min(720px,calc(100% - 24px));background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 14px;font-size:14px;text-align:center;box-shadow:0 2px 10px rgba(0,0,0,.08)}
+#caption b{color:var(--accent)}
+#caption .ph{display:block;font-size:12px;color:var(--muted)}
+#partcard{position:absolute;top:70px;left:12px;width:min(330px,calc(100% - 24px));background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:10px 12px;box-shadow:0 4px 18px rgba(0,0,0,.12)}
+#partcard h3{margin:0 0 4px;font-size:15px}
+#partcard .g{color:var(--muted);font-size:12px}
+#partcard p{margin:6px 0 0;font-size:13px}
+#partcard .x{position:absolute;top:4px;right:6px;border:0;background:none;font-size:18px;cursor:pointer;color:var(--muted)}
+
+#dock{position:absolute;left:12px;bottom:12px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;max-width:calc(100% - 110px)}
+.dp{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 8px 8px;box-shadow:0 2px 10px rgba(0,0,0,.08)}
+.dp h4{margin:0 0 4px;font-size:12px;color:var(--muted);font-weight:600;display:flex;justify-content:space-between;gap:8px}
+#linec{width:430px;height:96px;display:block}
+#pat{width:270px;height:220px;display:block;border-radius:4px}
+#chart{width:430px;height:220px;display:block}
+.col{display:flex;flex-direction:column;gap:10px}
+#dockToggle{position:absolute;right:12px;bottom:12px;border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:13px}
+
+#side{overflow:auto;background:var(--panel);border-left:1px solid var(--line)}
+.tabs{display:flex;position:sticky;top:0;background:var(--panel);z-index:2;border-bottom:1px solid var(--line)}
+.tabs button{flex:1;border:0;background:none;padding:9px 0;cursor:pointer;font-weight:600;color:var(--muted);border-bottom:3px solid transparent}
+.tabs button.on{color:var(--fg);border-bottom-color:var(--accent)}
+.tab{padding:12px 14px 20px}
+.ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.primary{flex:1 1 100%;border:0;border-radius:8px;padding:11px 12px;background:var(--accent);color:var(--accent-ink);font-weight:700;font-size:15px;cursor:pointer;text-align:left}
+.primary:disabled{opacity:.55;cursor:default}
+.btn{border:1px solid var(--line);background:var(--panel2);border-radius:6px;padding:4px 10px;cursor:pointer}
+.btn:disabled{opacity:.5;cursor:default}
+select{border:1px solid var(--line);background:var(--panel2);border-radius:6px;padding:3px 6px}
+.explain{margin-top:12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.explain .t{font-weight:700}
+.explain p{margin:6px 0 0;font-size:13px}
+.explain .phase{color:var(--accent);font-weight:600}
+.explain .phase:empty{display:none}
+.explain .why{color:var(--muted)}
+.explain .why::before{content:"为什么："; font-weight:700;color:var(--fg)}
+.explain.err{border-color:var(--bad)}
+.explain.err .t{color:var(--bad)}
+h4.sec{margin:16px 0 6px;font-size:13px;color:var(--muted)}
+ol#steps{list-style:none;margin:0;padding:0;counter-reset:s}
+ol#steps li{counter-increment:s;display:flex;gap:8px;align-items:center;padding:3px 6px;border-radius:5px;font-size:13px;color:var(--muted)}
+ol#steps li::before{content:counter(s);flex:0 0 20px;height:20px;border-radius:50%;border:1px solid var(--line);display:grid;place-items:center;font-size:11px;font-family:var(--f-mono)}
+ol#steps li .d{margin-left:auto;font-family:var(--f-mono);font-size:12px;color:var(--muted);font-weight:400}
+ol#steps li.done{color:var(--fg)}
+ol#steps li.done::before{content:"✓";background:var(--ok);border-color:var(--ok);color:#fff}
+ol#steps li.cur{background:var(--cur);color:var(--fg);font-weight:700}
+ol#steps li.cur::before{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.vals{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:13px;margin:0}
+.vals dt{color:var(--muted)}
+.vals dd{margin:0;text-align:right;font-family:var(--f-mono)}
+
+.presets{display:flex;flex-wrap:wrap;gap:6px}
+.presets button.on{border-color:var(--accent);color:var(--accent);font-weight:700}
+h4.fg{margin:16px 0 0;font-size:13px;color:var(--accent);border-bottom:1px solid var(--line);padding-bottom:3px}
+.field{margin-top:10px}
+.field .top{display:flex;justify-content:space-between;font-size:13px;gap:8px}
+.field .top b{font-family:var(--f-mono);white-space:nowrap}
+.field input[type=range]{width:100%;accent-color:var(--accent)}
+.field .tip{font-size:12px;color:var(--muted)}
+.field.tg{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 8px}
+.field.tg .tip{flex:1 1 100%}
+.lock{margin-top:10px;font-size:13px;color:var(--bad)}
+.predict{margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.predict h4{margin:0 0 6px;font-size:13px}
+.note{font-size:12px;color:var(--muted);margin-top:8px}
+
+.pgroup{margin-top:12px}
+.pgroup h4{margin:0 0 4px;font-size:13px;color:var(--muted)}
+.plist{display:flex;flex-wrap:wrap;gap:5px}
+.plist button{border:1px solid var(--line);background:var(--panel2);border-radius:5px;padding:2px 8px;cursor:pointer;font-size:13px}
+.plist button.on{border-color:var(--accent);background:var(--accent);color:var(--accent-ink)}
+
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.4);display:grid;place-items:center;z-index:10;padding:16px}
+.modal[hidden]{display:none}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;max-width:600px;width:100%;max-height:90vh;overflow:auto;padding:18px 20px;box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.card h2{margin:0 0 4px;font-size:18px}
+.verdict{font-weight:700;margin:4px 0 10px}
+.verdict.ok{color:var(--ok)} .verdict.bad{color:var(--bad)}
+.res{list-style:none;padding:0;margin:0}
+.res li{padding:7px 0;border-top:1px solid var(--line)}
+.res .h{display:flex;justify-content:space-between;gap:10px}
+.res .h span:first-child::before{display:inline-block;width:20px;font-weight:700}
+.res li.ok .h span:first-child::before{content:"✓";color:var(--ok)}
+.res li.bad .h span:first-child::before{content:"✗";color:var(--bad)}
+.res .v{font-family:var(--f-mono);white-space:nowrap;font-size:13px}
+.res .hint{font-size:12px;color:var(--muted);margin-left:20px}
+.res.small li{padding:3px 0;font-size:13px}
+.stats{font-size:13px;color:var(--muted);margin-top:10px}
+.warnbox{margin-top:10px;font-size:13px;color:var(--warn)}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.row .primary{flex:0 0 auto;text-align:center}
+
+@media (max-width:900px){
+  #app{grid-template-columns:minmax(0,1fr);grid-template-rows:auto 55vh auto;height:auto}
+  header{grid-row:1;padding:6px 10px;gap:6px 10px}
+  #stage{grid-row:2;grid-column:1}
+  #side{grid-row:3;grid-column:1}
+  header h1{font-size:15px}
+  #side{border-left:0;border-top:1px solid var(--line);overflow:visible}
+  #dock{transform:scale(.6);transform-origin:left bottom;left:6px;bottom:6px;max-width:none}
+  #caption{font-size:12px;padding:4px 10px}
+}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/examples/jsm/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>槽式清洗机 · 跑一批晶圆</h1>
+    <span id="state" class="pill">待机</span>
+    <span class="grp"><span class="lbl">工艺时间</span><span id="time" class="pill">0:00</span></span>
+    <span class="grp"><span class="lbl">视角</span><span class="seg" id="views">
+      <button data-v="overview" class="on">全线</button><button data-v="loader">装载区</button><button data-v="cb1">药液槽 1</button><button data-v="ob1">单槽 1</button><button data-v="cb2">药液槽 2</button><button data-v="ob2">单槽 2</button><button data-v="dr">干燥槽</button>
+    </span></span>
+    <label class="chk"><input type="checkbox" id="labels" checked>标签</label>
+    <label class="chk"><input type="checkbox" id="follow" checked>镜头跟随</label>
+    <label class="chk"><input type="checkbox" id="front" checked>机柜前板透明</label>
+  </header>
+
+  <main id="stage">
+    <canvas id="c"></canvas>
+    <div id="caption">点右边的 <b>▶ 开始</b>，一步一步把一批 50 片晶圆洗完。也可以拖动旋转、滚轮缩放，点零件看它是干什么的。</div>
+    <div id="partcard" hidden><button class="x" id="pcClose" aria-label="关闭">×</button><h3></h3><div class="g"></div><p></p></div>
+    <div id="dock">
+      <div class="col">
+        <div class="dp"><h4><span>整条线</span><span id="lineInfo"></span></h4><canvas id="linec"></canvas></div>
+        <div class="dp"><h4><span>趋势（整个过程）</span><span id="chartInfo"></span></h4><canvas id="chart"></canvas></div>
+      </div>
+      <div class="dp"><h4><span>图形放大（示意）</span><span id="patInfo"></span></h4><canvas id="pat"></canvas></div>
+    </div>
+    <button id="dockToggle">隐藏图表</button>
+  </main>
+
+  <aside id="side">
+    <div class="tabs"><button data-tab="run" class="on">运行</button><button data-tab="recipe">配方</button><button data-tab="parts">零件</button></div>
+
+    <section class="tab" id="tab-run">
+      <div class="ctl">
+        <button id="go" class="primary">▶ 开始</button>
+        <label class="chk"><input type="checkbox" id="auto">自动连续运行</label>
+        <span class="grp"><span class="lbl">速度</span><select id="speed"><option value="1">1×</option><option value="10">10×</option><option value="60" selected>60×</option><option value="300">300×</option></select></span>
+        <label class="chk" title="机械手、升降器在动的时候，速度最多 5×，方便看清交接"><input type="checkbox" id="slowmo" checked>搬送时放慢</label>
+        <button class="btn" id="pause">⏸ 暂停</button>
+      </div>
+      <div class="explain" id="explain"><div class="t">准备好了</div><p class="now">两个 FOUP 里各有 25 片晶圆，表面有有机物、颗粒和金属沾污，还有一层自然氧化膜。要依次经过 SPM、冲洗、SC1、冲洗、DHF、冲洗、减压干燥，再回到 FOUP。</p><p class="phase"></p><p class="why">先在"配方"里看看参数，也可以直接用标准配方开始。真实一批要一个多小时，默认 60 倍速。</p></div>
+      <h4 class="sec">工艺步骤</h4>
+      <ol id="steps"></ol>
+      <h4 class="sec">实时数值</h4>
+      <dl class="vals" id="vals"></dl>
+    </section>
+
+    <section class="tab" id="tab-recipe" hidden>
+      <div class="presets" id="presets"></div>
+      <div id="fields"></div>
+      <div class="lock" id="lockNote" hidden>运行中不能改配方，跑完再改。</div>
+      <div class="predict"><h4>按这个配方跑一遍，结果会是：</h4><ul class="res small" id="predict"></ul><div class="stats" id="predictStats"></div>
+        <div class="note">这是同一个简化模型从头到尾算一遍的结果：趋势对、数量级对，系数是估计值（见 docs/资料来源.md）。</div></div>
+    </section>
+
+    <section class="tab" id="tab-parts" hidden>
+      <div class="note" style="margin-top:0">点名字或直接点 3D 模型里的零件。顶栏可以把机柜前板变透明，看到下面的泵、过滤器和管路。</div>
+      <div id="plist"></div>
+    </section>
+  </aside>
+</div>
+
+<div class="modal" id="result" hidden><div class="card">
+  <h2>这一批的结果</h2><div class="verdict" id="verdict"></div>
+  <ul class="res" id="resList"></ul>
+  <div class="warnbox" id="resWarn"></div>
+  <div class="stats" id="resStats"></div>
+  <div class="row"><button class="primary" id="again">再跑一批</button><button class="btn" id="tweak">改配方再试</button><button class="btn" id="resClose">看看曲线</button></div>
+</div></div>
+
+<script>
+// 出错时把错误显示在页面上（手机上看不到控制台）
+window.__showErr = function (e) {
+  if (document.getElementById('jserr')) return;
+  var d = document.createElement('div'); d.id = 'jserr';
+  d.textContent = '页面出错了，请把这段文字发给我：\n' + (e && (e.stack || e.message) || e) + '\n' + navigator.userAgent;
+  document.body.appendChild(d);
+};
+window.addEventListener('error', function (ev) { window.__showErr(ev.error || ev.message); });
+window.addEventListener('unhandledrejection', function (ev) { window.__showErr(ev.reason); });
+setTimeout(function () {
+  if (!window.__wetReady && !document.getElementById('jserr')) window.__showErr('脚本没有运行起来。如果你是在 App 的文件预览里打开的，请改用电脑或手机浏览器（Chrome / Edge / Safari）打开这个文件。');
+}, 4000);
+</script>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
