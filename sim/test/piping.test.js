@@ -223,3 +223,56 @@ test('单槽：H₂O₂ 按注入流量选大 / 小流量阀；槽里液体的�
   ob.step(1);
   assert.equal(ob.fluid(), 'RA');
 });
+
+// ---------- 减压干燥槽 ----------
+test('干燥槽，标准配方：N₂ 置换、供 IPA、减压、回到大气压，各走对的管；气体都走有机排风；没有联锁问题', () => {
+  const seen = new Set();
+  runBatch(DEFAULT, (L, { state, flows, bad }) => {
+    assert.deepEqual(bad, [], `${(L.t / 60).toFixed(1)} min ${L.phase}`);
+    const d = L.dr, f = id => flows[id];
+    if (d.vacOn) {
+      seen.add('vac');
+      for (const e of ['dr.CH>dr.V_VAC', 'dr.V_VAC>dr.TRAP', 'dr.TRAP>dr.VP', 'dr.VP>sink.exOrg']) assert.ok(f(e), e);
+      assert.equal(f('dr.V_EXH>sink.exOrg'), undefined, '抽真空时排气阀关');
+    }
+    if (d.ipaOn) {
+      seen.add('ipa');
+      assert.equal(f('dr.NOZ_IPA>dr.TANK'), 'IPA');
+      assert.ok(d.o2 < 2 && d.lid > 0.99);
+    }
+    // 排气：置换刚开始顶出去的是空气，后面是 N₂、N₂ + IPA 蒸气
+    if (state.open['dr.V_EXH']) { seen.add('exh'); assert.ok(['air', 'N2', 'IPAV'].includes(f('dr.V_EXH>sink.exOrg')), f('dr.V_EXH>sink.exOrg')); }
+    if (state.open['dr.V_VENT']) { seen.add('vent'); assert.equal(f('src.N2>dr.V_VENT'), 'N2'); }
+    if (d.lid < 0.01) for (const e of ['dr.V_EXH>sink.exOrg', 'dr.VP>sink.exOrg', 'src.N2>dr.V_N2']) assert.equal(f(e), undefined, `开盖时 ${e} 不流`);
+  });
+  assert.deepEqual([...seen].sort(), ['exh', 'ipa', 'vac', 'vent']);
+});
+
+test('干燥槽，HF 放到干燥槽里：注 HF 时排液切到酸排液，冲干净以后才切回收；没有联锁问题', () => {
+  const R = PRESETS.find(p => p.id === 'hfdry').r;
+  const seen = [];
+  runBatch(R, (L, { flows, bad }) => {
+    assert.deepEqual(bad, []);
+    const to = drainTo(flows, 'dr');
+    if (L.dr.liq.inject) {
+      assert.ok(flows['src.HF>dr.V_HF'] && flows['src.DIW>dr.V_CDIW']);
+      assert.deepEqual(to, ['sink.acid']);
+    }
+    for (const s of to) if (seen[seen.length - 1] !== s) seen.push(s);
+  });
+  assert.deepEqual(seen, ['sink.acid', 'sink.reclaim']);
+});
+
+test('干燥槽联锁：盖子没关就开 IPA 阀、盖子没关就抽真空，都报出来', () => {
+  const check = mutate => {
+    const L = new Line(DEFAULT);
+    mutate(L.dr);
+    const { bad } = L.piping();
+    return bad.join('\n');
+  };
+  assert.equal(check(() => {}), '');
+  assert.match(check(d => { d.ipaOn = true; }), /盖子没关好或氧浓度没降下来就开了 IPA 阀/);
+  assert.match(check(d => { d.vacOn = true; }), /盖子没关就抽真空/);
+  assert.match(check(d => { d.lid = 1; d.o2 = 15; d.ipaOn = true; }), /氧浓度没降下来/);
+  assert.equal(check(d => { d.lid = 1; d.o2 = 0.5; d.ipaOn = true; }), '');
+});

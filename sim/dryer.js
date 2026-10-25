@@ -1,5 +1,8 @@
 // 减压干燥槽（Low-Pressure Dryer）：下面是水，水面上供 IPA，上面是 N₂。
 // 晶圆从水里慢慢提起，穿过 IPA 层到气体层，再减压、N₂ 吹干。
+// 槽里的水用单槽的液体模型（liq）：干燥槽也能上流冲洗、注 HF / HCl。
+// 同一个槽里做药液、冲洗、干燥，公开专利里有 [US6328809]（DIW 里注 HF、HCl → 冲洗 → 排液 → N₂ 带 IPA 蒸气干燥）；
+// 这里换成提拉：HF 之后晶圆不出液面、直接提拉干燥（推论，不是专利原文）。
 //
 // 模型（机理公认 [Leenaars1990]，数值都是估计）：
 // - IPA 层的"强度" ipa ∈ [0, 1]：供 IPA 时按 τ = 40 s 趋近 1；停了以后 IPA 往水里扩散（和水互溶），按 τ = 300 s 变弱
@@ -7,6 +10,8 @@
 // - 提得比 vCrit 快，晶圆上留下水膜，留下的比例 r = 1 − exp(−(v / vCrit − 1))
 // - 缝里最后留下的液体中 IPA 的比例 ≈ ipa × (1 − r)
 // 什么时候不准：真实的临界速度还和温度、IPA 浓度分布、表面状态有关；IPA 浓度梯度是三维的。
+
+import { OneBath } from './onebath.js';
 
 export const DRY = {
   tauIpaOn: 40, tauIpaOff: 300,
@@ -26,11 +31,13 @@ export class Dryer {
     this.pressure = 101.3; // kPa
     this.ipaL = 0;         // IPA 用量（示意：按供给时间 0.1 L/min 计）
     this.lift = null;      // 正在慢速提拉时记录 { sumR, sumIpa, n }
+    this.liq = new OneBath();   // 槽里的水（一开始是满槽干净的 DIW）
   }
 
   vCrit() { return DRY.vCrit0 + DRY.vCritIpa * this.ipa; }
 
   step(dt) {
+    this.liq.step(dt);
     const closed = this.lid > 0.99;
     if (closed && this.n2On) this.o2 += (0.1 - this.o2) * (1 - Math.exp(-dt / DRY.tauO2));
     else if (!closed) this.o2 += (21 - this.o2) * (1 - Math.exp(-dt / DRY.tauO2Open));

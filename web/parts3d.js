@@ -220,3 +220,22 @@ export function nozzleRow(n, pitch, tilt) {
   }
   return mesh(gs, M.resin);
 }
+
+// ---------- 减压干燥槽 ----------
+// 干式真空泵：横放的泵体 + 电机，上面是吸气口（接冷阱），后面是排气口（接有机排风）。原点在中心
+export function vacuumPump() {
+  const body = mesh([G.box(0.15, 0.12, 0.13, 0, -0.02), G.cylY(0.022, 0.05, 0, 0.065, 0)], M.pump);
+  const motor = mesh([G.cylX(0.05, 0.1, -0.12, -0.02, 0), G.cylX(0.054, 0.012, -0.065, -0.02, 0)], M.dark);
+  const ribs = mesh([0, 1, 2, 3].map(i => G.box(0.004, 0.13, 0.14, -0.05 + i * 0.035, -0.02, 0)), M.steel);
+  const base = mesh([G.box(0.28, 0.012, 0.15, -0.04, -0.086, 0)], M.steel);
+  const port = mesh([G.cylZ(0.02, 0.03, 0, -0.06, -0.08)], M.steel);
+  return grp(body, motor, ribs, base, port);
+}
+
+// 冷阱：带散热片的圆筒，把抽出来的 IPA 蒸气冷凝下来；下面有个排液口。原点在中心，高 h
+export function coldTrap(h) {
+  const can = mesh([G.cylY(0.03, h * 0.8), G.cylY(0.034, 0.008, 0, h * 0.42), G.cylY(0.034, 0.008, 0, -h * 0.42)], M.steel);
+  const fins = mesh([0, 1, 2, 3, 4].map(i => G.cylY(0.04, 0.003, 0, -h * 0.3 + i * h * 0.15)), M.filter);
+  const drain = mesh([G.cylY(0.006, 0.02, 0.015, -h * 0.5)], M.dark);
+  return grp(can, fins, drain);
+}

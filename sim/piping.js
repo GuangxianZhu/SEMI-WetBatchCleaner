@@ -3,7 +3,8 @@
 //
 // 节点 kind：source（供应）/ sink（排液、排风）/ tank（槽，有自己的液位）/ basin（接液槽：进多少出多少，没有液位）/
 //   valve / pump / heater / filter / mixer（混合块）/ unit（流量控制这类串在管上的单元）/ junction（汇合、分流点）/ nozzle / device（不过液体的设备，如兆声振板）
-// 管段：a → b 是正常流动方向；sys 表示属于哪个系统（supply 供液 / circ 循环 / overflow 溢流 / drain 排液 / exhaust 排风）
+// 管段：a → b 是正常流动方向；sys 表示属于哪个系统（supply 供液 / spray 喷在液面上、不让槽溢流 / circ 循环 / overflow 溢流 /
+//   drain 排液 / exhaust 排风 / vac 抽真空 / vent 气体从密封腔顶出去）
 // 流向只算"哪条管在流、流的是什么"，不算压力和流量。
 
 import { P } from './params.js';
@@ -22,16 +23,21 @@ export const FACILITY = {
   'sink.reclaim': { kind: 'sink', label: 'DIW 回收', accepts: 'clean' },
   'sink.exAcid': { kind: 'sink', label: '酸排风', accepts: 'gas' },
   'sink.exAlk': { kind: 'sink', label: '碱排风', accepts: 'gas' },
+  'src.N2': { kind: 'source', label: 'N₂', fluid: 'N2' },
+  'src.IPA': { kind: 'source', label: 'IPA', fluid: 'IPA' },
+  'sink.exOrg': { kind: 'sink', label: '有机排风', accepts: 'gas' },
 };
 
 // 液体的酸碱性（排液分流和联锁用）。RA / RK：单槽里还没冲干净的冲洗水（酸性 / 碱性），见 OneBath.fluid()
 export const FLUID_CLASS = {
   SPM: 'acid', H2SO4: 'acid', HF: 'acid', HCl: 'acid', RA: 'acid', SC1: 'alk', NH3: 'alk', RK: 'alk',
   H2O2: 'neutral', DIW: 'neutral', HDIW: 'neutral', gas: 'gas',
+  IPA: 'organic', N2: 'gas', IPAV: 'gas', air: 'gas',
 };
 export const FLUID_NAME = {
   SPM: 'SPM', SC1: 'SC1', H2SO4: 'H₂SO₄', H2O2: 'H₂O₂', NH3: 'NH₄OH', HF: 'HF', HCl: 'HCl',
   DIW: 'DIW', HDIW: '热 DIW', RA: '酸性冲洗水', RK: '碱性冲洗水', gas: '排气',
+  IPA: 'IPA', N2: 'N₂', IPAV: 'N₂ + IPA 蒸气', air: '空气',
 };
 // 一段管同时被几股液体走到时（例如混合块下游），显示"最浓"的那股：药液 > 热 DIW > DIW
 const FLUID_RANK = f => (f === 'DIW' || f === 'gas' ? 0 : f === 'HDIW' ? 1 : 2);
@@ -249,7 +255,7 @@ export function computeFlows(G, state) {
     let any = false;
     for (const e of G.out[id]) {
       if (e.sys === 'overflow' || e.sys === 'exhaust') continue;
-      if (mode === 'gravity' && e.sys !== 'drain') continue;
+      if (mode === 'gravity' && e.sys !== 'drain' && e.sys !== 'vent') continue;   // 重力排液；气体从密封腔顶出去也走这条
       if (path.some(p => p[0] === e)) continue;
       const b = e.b, np = [...path, [e, fluid]];
       if (isAcceptor(b)) {
@@ -275,7 +281,7 @@ export function computeFlows(G, state) {
     // 溢流：槽满了、而且有液体流进来
     if (e.sys === 'overflow') {
       const t = state.tank[e.a];
-      if (t && t.fluid && t.full && G.inn[e.a].some(x => flows[x.id])) {
+      if (t && t.fluid && t.full && G.inn[e.a].some(x => flows[x.id] && x.sys !== 'spray')) {
         flows[e.id] = t.fluid;
         if (G.nodes[e.b].kind === 'basin') walk(e.b, t.fluid, 'gravity', [], false);
       }
@@ -295,6 +301,107 @@ export function chemBathState(id, cb, state = { open: {}, run: {}, tank: {} }) {
   state.heater = state.heater || {};
   state.heater[`${id}.HTR`] = cb.heater;
   return state;
+}
+
+// ---------- 减压干燥槽模板 ----------
+// 按功能设计（作者不熟悉干燥槽，按公开资料和作者确认的"水 + IPA 层 + 气体层、提拉、N₂ 吹干、减压"来定，docs/管路.md 第 5 节）：
+//   槽里的水：冷 DIW → 混合块（HF、HCl 注进来）→ 槽底进液；两侧溢流、排水阀落进接液槽 → 分流到酸排液 / DIW 回收
+//            （HF 放到干燥槽里做：HF 之后冲干净，不出液面直接干燥。同一个槽里做药液、冲洗、干燥的公开例子 [US6328809]）
+//   IPA：IPA → IPA 阀 → 液面喷嘴（水面上形成一层 IPA，作者确认）
+//   气体：N₂ → N₂ 阀 → 上部喷嘴（置换氧、吹干）；N₂ → 破真空阀（减压后回到大气压）
+//         密封腔 → 真空阀 → 冷阱（把 IPA 蒸气凝下来）→ 真空泵 → 有机排风；密封腔 → 排气阀 → 有机排风（常压时）
+export function dryerTemplate(id) {
+  const k = s => `${id}.${s}`;
+  const V = (tag, label, at, role, more = {}) => ({ kind: 'valve', tag, label, at, role, ...more });
+  const nodes = {
+    [k('TANK')]: { kind: 'tank', label: '槽（水）', role: '下面是一槽干净的 DIW，晶圆浸在里面；水面上供 IPA 形成一层 IPA，上面是密封的气体空间。也能上流冲洗、注 HF' },
+    [k('CH')]: { kind: 'tank', label: '密封腔', role: '槽上面的气体空间，盖上盖子就密封：先用 N₂ 把氧赶走（IPA 可燃），再减压，最后用 N₂ 回到大气压' },
+    [k('PAN')]: { kind: 'basin', label: '接液槽', role: '槽两侧的溢流和排水落到这里，再从一根排液管出去，分到酸排液 / DIW 回收' },
+    [k('V_CDIW')]: V('V1', 'DIW 阀', [175, 418], '往槽里供 DIW：上流冲洗、注药时的载液'),
+    [k('V_HF')]: V('V2', 'HF 注入阀', [130, 364], 'HF 放到干燥槽里做（HF-last）：HF 之后冲干净，不出液面直接干燥，疏水面不碰空气'),
+    [k('V_HCl')]: V('V3', 'HCl 注入阀', [130, 390], '稀 HCl：和 HF 一起或者单独用，去金属（公开专利里和 HF 一起注进 DIW 流）'),
+    [k('MIX')]: { kind: 'mixer', label: '混合块', at: [230, 377], rect: [220, 352, 20, 50], role: '原液按比例注进 DIW 流，从槽底进槽' },
+    [k('V_QDR')]: V('V4', '排水阀', [430, 281], '槽底的大口径阀：把槽里的水排空（换水、HF 之后排掉）', { rot: true, big: true }),
+    [k('JD')]: { kind: 'junction', label: '排液分流点', at: [490, 356], role: '一根排液管分成两路，同时只能开一路' },
+    [k('V_DA')]: V('V5', '酸排液阀', [570, 334], '槽里有 HF、HCl，或者冲洗水还没冲干净时走这路'),
+    [k('V_DREC')]: V('V6', '回收阀', [570, 384], '冲干净的 DIW 才能回收（和单槽同样的规则）'),
+    [k('V_N2')]: V('V7', 'N₂ 阀', [150, 60], '置换：把氧赶下去再供 IPA（配方目标 1 %，联锁线 2 %）；之后一直小流量供着（抽真空时也供一点，帮着带走 IPA 蒸气，估计），最后用 N₂ 吹干'),
+    [k('NOZ_N2')]: { kind: 'nozzle', label: 'N₂ 喷嘴', at: [392, 76], role: '密封腔上部的喷嘴，往下吹 N₂' },
+    [k('V_VENT')]: V('V8', '破真空阀', [150, 100], '减压以后通 N₂ 回到大气压，盖子才能打开'),
+    [k('V_IPA')]: V('V9', 'IPA 阀', [150, 128], '在水面上形成一层 IPA；IPA 可燃，盖子没关、氧没降下来不能开（联锁）'),
+    [k('NOZ_IPA')]: { kind: 'nozzle', label: 'IPA 喷嘴', at: [366, 140], role: '贴着水面的喷嘴，IPA 落在水面上形成一层（作者确认：水面上是一层 IPA）' },
+    [k('V_VAC')]: V('V10', '真空阀', [545, 60], '减压：压力越低沸点越低，残留液体在低温下很快蒸发；盖子没关不能开（联锁）'),
+    [k('TRAP')]: { kind: 'unit', label: '冷阱', short: '冷阱', at: [600, 60], part3: 'vac', role: '把抽出来的 IPA 蒸气冷凝下来，不让它进真空泵' },
+    [k('VP')]: { kind: 'pump', label: '真空泵', short: '真空泵', at: [600, 118], model: 'vac', labelSide: 'right', role: '把密封腔抽到减压；抽出来的气体走有机排风' },
+    [k('V_EXH')]: V('V11', '排气阀', [545, 110], '关着盖、常压时一直开：注药时的雾气、供进来的 N₂ / IPA 蒸气从这里走有机排风；抽真空和破真空时关'),
+    [k('LID')]: { kind: 'device', label: '密封盖', rect: [286, 26, 228, 8], role: '关上才能减压、供 IPA；开盖前要先回到大气压' },
+  };
+  const fac = {
+    'src.DIW': [40, 418], 'src.HF': [40, 364], 'src.HCl': [40, 390], 'src.N2': [[40, 60], [40, 100]], 'src.IPA': [40, 128],
+    'sink.acid': [630, 334], 'sink.reclaim': [630, 384], 'sink.exOrg': [600, 180],
+  };
+  const e = edge;
+  const edges = [
+    // 槽里的水
+    e('src.DIW', k('V_CDIW'), 'supply', [[64, 418], [165, 418]], [[-0.29, 0.15, -0.62], [-0.29, 0.15, -0.38]]),
+    e(k('V_CDIW'), k('MIX'), 'supply', [[185, 418], [230, 418], [230, 403]], [[-0.29, 0.15, -0.34], [-0.29, 0.15, -0.16], [-0.29, 0.31, -0.16], [-0.265, 0.31, -0.16]]),
+    e('src.HF', k('V_HF'), 'supply', [[64, 364], [120, 364]], [[-0.235, 0.31, -0.62], [-0.235, 0.31, -0.38]]),
+    e(k('V_HF'), k('MIX'), 'supply', [[140, 364], [220, 364]], [[-0.235, 0.31, -0.34], [-0.235, 0.31, -0.185]]),
+    e('src.HCl', k('V_HCl'), 'supply', [[64, 390], [120, 390]], [[-0.195, 0.31, -0.62], [-0.195, 0.31, -0.46]]),
+    e(k('V_HCl'), k('MIX'), 'supply', [[140, 390], [220, 390]], [[-0.195, 0.31, -0.42], [-0.195, 0.31, -0.185]]),
+    e(k('MIX'), k('TANK'), 'supply', [[230, 352], [230, 340], [372, 340], [372, 262]], [[-0.045, 0.31, -0.16], [-0.02, 0.31, -0.16], [-0.02, 0.597, -0.16]]),
+    e(k('TANK'), k('PAN'), 'overflow', [[342, 153], [318, 153], [318, 300]], null, 'L'),
+    e(k('TANK'), k('PAN'), 'overflow', [[458, 153], [482, 153], [482, 300]], null, 'R'),
+    e(k('TANK'), k('V_QDR'), 'drain', [[430, 260], [430, 270]], [[0.171, 0.63, 0], [0.205, 0.63, 0], [0.205, 0.605, 0]]),
+    e(k('V_QDR'), k('PAN'), 'drain', [[430, 292], [430, 300]], [[0.205, 0.545, 0], [0.205, 0.505, 0]]),
+    e(k('PAN'), k('JD'), 'drain', [[490, 326], [490, 352]], [[0.20, 0.497, 0.12], [0.20, 0.365, 0.12]]),
+    e(k('JD'), k('V_DA'), 'drain', [[494, 356], [530, 356], [530, 334], [560, 334]], [[0.185, 0.35, 0.12], [0.15, 0.35, 0.12], [0.15, 0.27, 0.12]]),
+    e(k('JD'), k('V_DREC'), 'drain', [[494, 356], [530, 356], [530, 384], [560, 384]], [[0.215, 0.35, 0.12], [0.25, 0.35, 0.12], [0.25, 0.27, 0.12]]),
+    e(k('V_DA'), 'sink.acid', 'drain', [[580, 334], [604, 334]], [[0.15, 0.23, 0.12], [0.15, 0.10, 0.12], [0.15, 0.10, -0.46]]),
+    e(k('V_DREC'), 'sink.reclaim', 'drain', [[580, 384], [604, 384]], [[0.25, 0.23, 0.12], [0.25, 0.18, 0.12], [0.25, 0.18, -0.54]]),
+    // IPA
+    e('src.IPA', k('V_IPA'), 'supply', [[64, 128], [140, 128]], [[0.04, 1.06, -0.62], [0.04, 1.06, -0.38]]),
+    e(k('V_IPA'), k('NOZ_IPA'), 'supply', [[160, 128], [366, 128], [366, 132]], [[0.04, 1.06, -0.34], [0.04, 1.06, -0.236], [0.04, 1.03, -0.236], [0.04, 1.03, -0.208]]),
+    e(k('NOZ_IPA'), k('TANK'), 'spray', [[366, 146], [366, 156]], null),     // IPA 只在水面上铺一层，不把水顶出去
+    // N₂：置换、吹干、破真空
+    e('src.N2', k('V_N2'), 'supply', [[64, 60], [140, 60]], [[-0.12, 1.38, -0.62], [-0.12, 1.38, -0.38]]),
+    e(k('V_N2'), k('NOZ_N2'), 'supply', [[160, 60], [392, 60], [392, 67]], [[-0.12, 1.38, -0.34], [-0.12, 1.38, -0.236], [-0.12, 1.38, -0.208]]),
+    e(k('NOZ_N2'), k('CH'), 'supply', [[392, 82], [392, 96]], null),
+    e('src.N2', k('V_VENT'), 'supply', [[64, 100], [140, 100]], [[-0.04, 1.30, -0.62], [-0.04, 1.30, -0.38]]),
+    e(k('V_VENT'), k('CH'), 'supply', [[160, 100], [300, 100]], [[-0.04, 1.30, -0.34], [-0.04, 1.30, -0.238]]),
+    // 抽真空、排气（气体从密封腔出去）
+    e(k('CH'), k('V_VAC'), 'vac', [[510, 60], [535, 60]], [[-0.228, 1.25, 0.15], [-0.27, 1.25, 0.15], [-0.27, 0.83, 0.15]]),
+    e(k('V_VAC'), k('TRAP'), 'vac', [[555, 60], [576, 60]], [[-0.27, 0.77, 0.15], [-0.27, 0.47, 0.15], [-0.05, 0.47, 0.15], [-0.05, 0.445, 0.15]]),
+    e(k('TRAP'), k('VP'), 'vac', [[600, 72], [600, 104]], [[-0.05, 0.36, 0.15], [-0.05, 0.31, 0.15]]),
+    e(k('VP'), 'sink.exOrg', 'vac', [[600, 132], [600, 171]], [[-0.05, 0.14, 0.06], [-0.05, 0.14, -0.62]]),
+    e(k('CH'), k('V_EXH'), 'vent', [[510, 110], [535, 110]], [[0.10, 1.30, -0.238], [0.10, 1.30, -0.38]]),
+    e(k('V_EXH'), 'sink.exOrg', 'vent', [[555, 110], [566, 110], [566, 180], [576, 180]], [[0.10, 1.30, -0.34], [0.10, 1.30, -0.62]]),
+  ];
+  // 仪表：压力、氧浓度在密封腔，比电阻在槽里
+  const inst = [
+    { id: k('PT'), tag: 'PT', label: '压力', at: [232, 172], to: [292, 172], on: k('CH') },
+    { id: k('OT'), tag: 'O₂', label: '氧浓度', at: [232, 212], to: [292, 212], on: k('CH') },
+    { id: k('AT'), tag: 'AT', label: '比电阻', at: [575, 236], to: [456, 236], on: k('TANK') },
+  ];
+  const p3 = {
+    [k('V_CDIW')]: [-0.29, 0.15, -0.36], [k('V_HF')]: [-0.235, 0.31, -0.36], [k('V_HCl')]: [-0.195, 0.31, -0.44], [k('MIX')]: [-0.155, 0.31, -0.16],
+    [k('V_QDR')]: [0.205, 0.575, 0], [k('JD')]: [0.20, 0.35, 0.12], [k('V_DA')]: [0.15, 0.25, 0.12], [k('V_DREC')]: [0.25, 0.25, 0.12],
+    [k('V_IPA')]: [0.04, 1.06, -0.36], [k('V_N2')]: [-0.12, 1.38, -0.36], [k('V_VENT')]: [-0.04, 1.30, -0.36],
+    [k('V_VAC')]: [-0.27, 0.80, 0.15], [k('TRAP')]: [-0.05, 0.40, 0.15], [k('VP')]: [-0.05, 0.20, 0.15], [k('V_EXH')]: [0.10, 1.30, -0.36],
+  };
+  const size3 = { [k('MIX')]: [0.22, 0.05, 0.05], [k('TRAP')]: [0.07, 0.08, 0.07] };
+  const act3 = { [k('V_QDR')]: 'z', [k('V_DA')]: 'z', [k('V_DREC')]: 'z', [k('V_VAC')]: 'z' };
+  const box2 = {
+    out: [290, 36, 220, 292], in: [340, 150, 120, 110], outId: k('CH'), inId: k('TANK'), outLabel: '密封腔', inLabel: '槽（晶圆）', outLabelAt: [296, 50, 'start'],
+    extra: [{ id: k('PAN'), rect: [292, 302, 216, 24], label: '接液槽' }],
+  };
+  const hdr3 = [[0.10, -0.46, 0.5], [0.18, -0.54, 0.5]];
+  const legend = ['DIW', 'HF', 'RA', 'IPA', 'IPAV', 'N2'];
+  const rules = {
+    inject: { [k('V_HF')]: 'HF', [k('V_HCl')]: 'HCl' }, carrier: [k('V_CDIW')],
+    dryer: { ipa: k('V_IPA'), vac: k('V_VAC') },
+  };
+  return { id, type: 'dryer', nodes, edges, inst, fac, p3, size3, act3, box2, hdr3, legend, rules };
 }
 
 // ---------- 从单槽的状态推出阀门、槽的状态 ----------
@@ -328,6 +435,23 @@ export function oneBathState(id, ob, state = { open: {}, run: {}, tank: {} }) {
   if (dest === 'V_DREC' && (ob.dumping || ob.cleanS < P.reclaimDelayS)) dest = 'V_DA';
   for (const v of OB_DRAIN) o[k(v)] = toPan && v === dest;
   state.tank[k('TANK')] = { fluid, full: ob.full };
+  return state;
+}
+
+// ---------- 从减压干燥槽的状态推出阀门、槽的状态 ----------
+// 槽里的水和单槽一样（冷 DIW、注药、排水、排液分流的规则都一样）；气体这边按干燥的步骤
+export function dryerState(id, dr, state = { open: {}, run: {}, tank: {} }) {
+  oneBathState(id, dr.liq, state);
+  const k = s => `${id}.${s}`, o = state.open, closed = dr.lid > 0.99, atm = dr.pressure >= 99;
+  o[k('V_N2')] = dr.n2On;
+  o[k('V_IPA')] = dr.ipaOn;
+  o[k('V_VAC')] = dr.vacOn;
+  state.run[k('VP')] = dr.vacOn;
+  o[k('V_EXH')] = closed && !dr.vacOn && atm;     // 关着盖、常压：一直排气（注药时的雾气、N₂、IPA 蒸气都从这里走）
+  o[k('V_VENT')] = closed && !dr.vacOn && !atm;                           // 减压以后用 N₂ 回到大气压
+  const gas = !closed ? 'air' : dr.ipaOn || dr.ipa > 0.05 ? 'IPAV' : dr.o2 < 20 ? 'N2' : 'air';
+  state.tank[k('CH')] = { fluid: gas, full: false };
+  (state.dryer ||= {})[id] = { lid: dr.lid, o2: dr.o2 };
   return state;
 }
 
@@ -367,6 +491,12 @@ export function checkInterlocks(G, state, flows, blocked = []) {
     const cls = new Set(inj.map(v => FLUID_CLASS[t.rules.inject[v]]));
     if (cls.has('acid') && cls.has('alk')) bad.push(`${t.id}：酸和碱的注入阀同时开着`);
     if (inj.length && !t.rules.carrier.some(v => state.open[v])) bad.push(`${t.id}：注药时 DIW 没在流（原液直接进槽，配比不对）`);
+    // 干燥槽：IPA 可燃，盖子关好、氧降到 2 % 以下才能开 IPA 阀；盖子关好才能抽真空
+    const dr = t.rules.dryer, ds = state.dryer && state.dryer[t.id];
+    if (dr && ds) {
+      if (state.open[dr.ipa] && (ds.lid < 0.99 || ds.o2 > 2)) bad.push(`${t.id}：盖子没关好或氧浓度没降下来就开了 IPA 阀`);
+      if (state.open[dr.vac] && ds.lid < 0.99) bad.push(`${t.id}：盖子没关就抽真空`);
+    }
   }
   return bad;
 }

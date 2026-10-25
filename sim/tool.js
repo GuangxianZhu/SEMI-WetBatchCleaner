@@ -16,13 +16,13 @@ import { Dryer } from './dryer.js';
 import { Surface } from './surface.js';
 import { DEFAULT, cloneRecipe, unitOfBath, recipeFacts } from './recipe.js';
 import { SPECIES } from './chem.js';
-import { buildGraph, chemBathTemplate, oneBathTemplate, computeFlows, chemBathState, oneBathState, checkInterlocks } from './piping.js';
+import { buildGraph, chemBathTemplate, oneBathTemplate, dryerTemplate, computeFlows, chemBathState, oneBathState, dryerState, checkInterlocks } from './piping.js';
 import { Bus } from './bus.js';
 import { Main, lineSteps } from './main.js';
 import { LoaderSub, TransferSub, BathSub } from './subs.js';
 
-// 管路（药液槽、单槽的模板，见 docs/管路.md；减压干燥槽、夹爪清洗干燥位以后再做）
-export const PIPING = buildGraph([chemBathTemplate('cb1', 'SPM'), oneBathTemplate('ob1'), chemBathTemplate('cb2', 'SC1'), oneBathTemplate('ob2')]);
+// 管路（药液槽、单槽、减压干燥槽的模板，见 docs/管路.md；夹爪清洗干燥位以后再做）
+export const PIPING = buildGraph([chemBathTemplate('cb1', 'SPM'), oneBathTemplate('ob1'), chemBathTemplate('cb2', 'SC1'), oneBathTemplate('ob2'), dryerTemplate('dr')]);
 
 const NAME = STATION_NAME;
 const isCb = id => id === 'cb1' || id === 'cb2';
@@ -95,6 +95,7 @@ export class Line {
     chemBathState('cb2', this.cb2, state);
     oneBathState('ob1', this.ob1, state);
     oneBathState('ob2', this.ob2, state);
+    dryerState('dr', this.dr, state);
     const { flows, blocked } = computeFlows(PIPING, state);
     return { state, flows, blocked, bad: checkInterlocks(PIPING, state, flows, blocked) };
   }
@@ -146,6 +147,7 @@ export class Line {
     this.carry = null;
     if (!k) return;
     if (isOb(id)) this[id].addLiquid(P.dragOutL, k.c, k.T);
+    if (id === 'dr') this.dr.liq.addLiquid(P.dragOutL, k.c, k.T);
     if (isCb(id)) {
       this[id].dragIn(P.dragOutL, k.c);
       let mol = 0;
@@ -172,6 +174,7 @@ export class Line {
       if (tank === 'cb1') this.surf.inSPM(dt, this.cb1.T);
       else if (tank === 'cb2') this.surf.inSC1(dt, this.cb2);
       else if (isOb(tank)) this.surf.inOneBath(dt, this[tank].c);
+      else if (tank === 'dr') this.surf.inOneBath(dt, this.dr.liq.c);   // 干燥槽的水（干净的 DIW 不改变表面；注了 HF 就刻）
     }
     // 快排时晶圆露出液面：每次快排记一次
     for (const id of ['ob1', 'ob2']) {
@@ -204,8 +207,8 @@ export class Line {
 
   usage() {
     return {
-      diwL: this.ob1.diwL + this.ob2.diwL,
-      hfL: this.ob2.chemL.HF || 0,
+      diwL: this.ob1.diwL + this.ob2.diwL + this.dr.liq.diwL,
+      hfL: (this.ob2.chemL.HF || 0) + (this.dr.liq.chemL.HF || 0),
       ipaL: this.dr.ipaL,
       dragL: 2 * P.dragOutL,
     };

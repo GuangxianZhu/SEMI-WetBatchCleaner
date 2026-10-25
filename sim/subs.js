@@ -133,9 +133,12 @@ function* lifterTo(L, id, z, speed = P.liftSpeed, onStep = null) {
   }
 }
 
+// 槽里的水：单槽就是它自己，减压干燥槽是槽里的那一槽水
+const liqOf = S => (S.addr === 'dr' ? S.L.dr.liq : S.L[S.addr]);
+
 // 单槽：快排冲洗
 function* qdrCycle(S, Tin, label, shower) {
-  const ob = S.L[S.addr];
+  const ob = liqOf(S);
   S.say(`${label}：快排，几秒内排空${shower ? '，淋浴让晶圆保持湿润' : '（没开淋浴，晶圆露在空气里）'}`);
   ob.startDump(shower);
   yield* until(() => ob.empty);
@@ -148,7 +151,7 @@ function* qdrCycle(S, Tin, label, shower) {
 
 // 单槽：上流冲洗（按比电阻或按时间结束）
 function* rinseUpflow(S, s, tag) {
-  const id = S.addr, ob = S.L[id];
+  const id = S.addr, ob = liqOf(S);
   ob.supply(s.lpm, s.T);
   let t = 0;
   if (s.end === 'time') {
@@ -167,7 +170,7 @@ function* rinseUpflow(S, s, tag) {
 
 // 单槽：注药（满槽边进边溢；不停供液，下一步通常是上流冲洗，接着换成纯 DIW）
 function* injectStep(S, s, tag) {
-  const id = S.addr, ob = S.L[id];
+  const id = S.addr, ob = liqOf(S);
   if (s.chem === 'HF' && ob.c.NH3 > 1e-5) S.event('note', { msg: `${NAME[id]} 里还有氨水就进了 HF（会生成 NH₄F），SC1 之后要先冲干净` });
   const nm = s.chem === 'HF' ? 'DHF' : FLUID_NAME[s.chem];
   S.say(`${tag}注入 ${nm}（1 : ${s.ratio}）${s.s} s：满槽边进边溢，浓度慢慢爬升`);
@@ -217,7 +220,7 @@ function* liftDry(S, mmS, vacuum, tag = '') {
   L.dried = true;
 }
 
-// 减压干燥槽：关盖 → 单元里的步骤 → 回到大气压 → 开盖
+// 减压干燥槽：关盖 → 单元里的步骤（可以先在槽里上流冲洗、注 HF）→ 回到大气压 → 开盖
 function* dryerUnit(S, u) {
   const d = S.L.dr, n = u.steps.length, vacuum = u.steps.some(s => s.kind === 'vacuum');
   let lifted = false;
@@ -234,8 +237,12 @@ function* dryerUnit(S, u) {
     else if (s.kind === 'lift') { g = liftDry(S, s.mmS, vacuum, tag); lifted = true; }
     else if (s.kind === 'vacuum') g = (function* () { S.say(`${tag}减压：残留的液体在低温下很快蒸发`); d.vacOn = true; yield* waitS(s.s); })();
     else if (s.kind === 'n2dry') g = (function* () { S.say(`${tag}N₂ 吹干`); d.n2On = true; yield* waitS(s.s); })();
+    else if (s.kind === 'upflow') g = rinseUpflow(S, s, tag);
+    else if (s.kind === 'inject') g = injectStep(S, s, tag);
     if (g) yield* logStep(S, u, i, g);
+    if (s.kind === 'inject' && u.steps[i + 1] && u.steps[i + 1].kind !== 'upflow') d.liq.stop();   // 注完药后面不是冲洗：停止供液
   }
+  d.liq.stop();
   if (!lifted) { S.event('note', { msg: '干燥单元里没有"慢速提拉"，按 1 mm/s 提起来' }); yield* liftDry(S, 1.0, vacuum); }
   d.vacOn = false;
   S.say('回到大气压');
