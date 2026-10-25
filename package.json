@@ -1,0 +1,8 @@
+{
+  "name": "semi-wetbatchcleaner",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"sim/test/*.test.js\""
+  }
+}
