@@ -118,11 +118,13 @@ test('单槽，标准配方整批：快排、溢流、注药都走对的管，�
       }
       if (ob.full && ob.Q > 0) for (const e of OVF(id)) assert.ok(flows[e], '满槽供液时两侧都在溢流');
       if (!ob.full) for (const e of OVF(id)) assert.equal(flows[e], undefined, '没满不溢流');
-      if (flows[`${k('JN')}>${k('TANK')}`] === 'HDIW') seen[id].add('hot');
+      if (flows[`${k('MIX')}>${k('TANK')}`] === 'HDIW') seen[id].add('hot');
+      if (ob.dumping) assert.ok(!to.includes('sink.reclaim'), '快排不进回收');
+      if (to.includes('sink.reclaim')) assert.ok(ob.cleanS >= P.reclaimDelayS, '干净以后溢流够久才切回收');
       if (ob.inject && ob.inject.species === 'HF') {
         seen[id].add('hf');
         assert.ok(flows[`src.HF>${k('V_HF')}`] && flows[`src.DIW>${k('V_CDIW')}`], '注 HF 时 DIW 也在流');
-        assert.equal(flows[`${k('JN')}>${k('TANK')}`], 'HF');
+        assert.equal(flows[`${k('MIX')}>${k('TANK')}`], 'HF');
         assert.deepEqual(to, ['sink.acid']);
       }
       for (const s of to) seen[id].add(s);
@@ -177,6 +179,22 @@ test('单槽联锁：分流切错、全关、开两路，酸碱同注，注药�
   const { flows, blocked } = computeFlows(PIPING, state);
   assert.deepEqual(blocked, ['ob1.PAN']);
   assert.equal(flows['ob1.TANK>ob1.V_QDR'], undefined);
+});
+
+test('单槽回收的两条规则：干净的水快排也不进回收；冲干净以后还要再溢流一段时间才切回收', () => {
+  const ob = new OneBath();                       // 新槽：满槽干净 DIW
+  const dest = () => drainTo(computeFlows(PIPING, oneBathState('ob1', ob, { open: {}, run: {}, tank: {} })).flows, 'ob1');
+  ob.supply(DEFAULT.upflowLpm, P.coldC);
+  assert.deepEqual(dest(), ['sink.acid'], '刚开始溢流：先冲排液管');
+  for (let t = 0; t < P.reclaimDelayS - 1; t += 0.5) ob.step(0.5);
+  assert.deepEqual(dest(), ['sink.acid'], `还没到 ${P.reclaimDelayS} s`);
+  for (let t = 0; t < 2; t += 0.5) ob.step(0.5);
+  assert.deepEqual(dest(), ['sink.reclaim'], '溢流够久了，切回收');
+  ob.startDump(true);
+  assert.equal(ob.fluid(), 'DIW');
+  assert.deepEqual(dest(), ['sink.acid'], '快排：哪怕是干净的水也不进回收');
+  ob.step(0.5);
+  assert.equal(ob.cleanS, 0, '快排以后计时从头算');
 });
 
 test('单槽：H₂O₂ 按注入流量选大 / 小流量阀；槽里液体的叫法按浓度和比电阻', () => {

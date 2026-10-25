@@ -22,6 +22,7 @@ export class OneBath {
     this.diwL = 0;            // 累计 DIW 用量
     this.chemL = {};          // 累计原液用量 { species: L }
     this.showerActive = false;
+    this.cleanS = 0;          // 溢流出去的水已经干净了多久（排液切回收用，见 sim/piping.js）
   }
 
   get level() { return this.V / P.Vliq; }
@@ -99,6 +100,8 @@ export class OneBath {
 
     this.rhoAcc += dt;
     if (this.rhoAcc >= P.rhoEveryS) { this.rhoAcc = 0; this.rho = resistivity(this.c); }
+    // 满槽在溢流、而且槽里已经是干净的 DIW：计时；快排、停止供液、变脏都从头算
+    this.cleanS = !this.dumping && this.full && qIn > 0 && this.fluid() === 'DIW' ? this.cleanS + dt : 0;
   }
 
   // 槽里主要的药（给界面配颜色、显示用）
