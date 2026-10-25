@@ -107,4 +107,17 @@ export class OneBath {
     for (const s of SPECIES) if (this.c[s] > v) { v = this.c[s]; best = s; }
     return best;
   }
+
+  // 现在槽里算什么液体（管路图配颜色、排液分流用；分界是原创的）：
+  //   主要的药 ≥ 1 mmol/L → 叫药的名字（HF、H2SO4 …）
+  //   药 < 1 µmol/L 而且比电阻 ≥ P.reclaimRho → DIW（干净，可以回收）
+  //   中间 → 冲洗水：主要是氨水叫 RK（碱性），其余叫 RA（酸性，按酸排液处理）
+  fluid() {
+    if (this.V <= 1e-6) return null;
+    const s = this.mainSpecies();
+    const c = s ? this.c[s] : 0;
+    if (c >= 1e-3) return s;
+    if (c < 1e-6 && this.rho >= P.reclaimRho) return 'DIW';
+    return s === 'NH3' ? 'RK' : 'RA';
+  }
 }

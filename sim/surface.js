@@ -105,7 +105,7 @@ export class Surface {
   }
 
   // 单槽里：HF 刻氧化膜（刻蚀量 = ∫速率 dt，资料来源 D4）；有 H₂O₂ 时氧化膜长回来
-  inONB(dt, c) {
+  inOneBath(dt, c) {
     this.dry = false;
     const rTh = SURF.kHF * c.HF / 60;           // nm/s
     this.thermOxLoss += rTh * dt;

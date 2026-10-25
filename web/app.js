@@ -160,7 +160,6 @@ const PART_INFO = {
   robot: ['槽间搬送机械手', '搬送', '夹着整批 50 片在槽之间水平移动，全线只有一台。槽里的上下动作交给每个槽自己的升降器。'],
   rail: ['导轨', '搬送', '机械手沿着它在各站之间走。'],
   chuck_clean: ['夹爪清洗干燥位', '搬送', '冲洗夹爪，再用 N₂ 吹干。搬过药液里出来的晶圆以后要洗；从减压干燥槽取干片之前也要洗、吹干。都和槽里的处理同时进行，不占晶圆的时间，但占机械手的时间。'],
-  hot_diw: ['DIW 加热器', '单槽（共用）', '供热水冲洗（两个单槽共用）。SPM 之后先用热水冲：硫酸黏、难冲。'],
   frame: ['机架和外壳', '公共', ''],
   ffu: ['风机过滤单元', '公共', '从上往下送洁净空气。'],
   exhaust: ['排风口', '公共', '槽后面的排风口抽走药液蒸气；按酸 / 碱 / 有机切换。'],
@@ -194,11 +193,15 @@ for (const [id, n] of [['ob1', 1], ['ob2', 2]]) {
   const g = `单槽 ${n}`;
   Object.assign(PART_INFO, {
     [`${id}_tank`]: [`单槽 ${n} · 槽体`, g, '石英槽。同一个槽里换液：低浓度药液处理、纯水上流冲洗都在这里做，每批现配、用完排掉。'],
-    [`${id}_inlet`]: [`单槽 ${n} · 底部进液管`, g, '把液体均匀地从下往上送进片间，从顶部溢流走（上流）。'],
-    [`${id}_qdr`]: [`单槽 ${n} · 快排阀`, g, '几秒内把槽排空（快排冲洗 QDR）：每排一次只剩约 2 % 的残液，前期稀释得快。'],
-    [`${id}_shower`]: [`单槽 ${n} · 淋浴喷嘴`, g, '快排时喷水，让晶圆保持湿润，防止液面降下去时弯月面把图形拉倒。'],
-    [`${id}_mix`]: [`单槽 ${n} · 药液注入阀组`, g, '按比例把药液原液注进 DIW 流（在线混合）。满槽注药时浓度按 1 − e^(−t/τ) 爬升。'],
-    [`${id}_res`]: [`单槽 ${n} · 比电阻计`, g, '判断冲洗干不干净。25 °C 纯水是 18.18 MΩ·cm；离子越多比电阻越低。'],
+    [`${id}_pan`]: [`单槽 ${n} · 接液槽`, g, '把槽围起来的外槽。两侧的溢流和快排的水都落到这里，再从一根排液管出去，按液体切到酸排液 / 碱排液 / DIW 回收。'],
+    [`${id}_inlet`]: [`单槽 ${n} · 槽底进液分配管`, g, 'DIW（和注进去的药）从槽底后角进来，沿两条长边往片间送，从顶部溢流走（上流）。'],
+    [`${id}_shower`]: [`单槽 ${n} · 淋浴喷嘴`, g, '快排时喷水，让晶圆保持湿润，防止液面降下去时弯月面把图形拉倒；快排后补水时一直喷到晶圆重新浸没。'],
+    [`${id}_mix`]: [`单槽 ${n} · 混合块`, g, '冷 DIW 从这里穿过，HF、HCl、NH₄OH、H₂O₂（大 / 小流量两路）的注入阀插在后面，按比例把原液注进去。槽里浓度 = 原液流量 ÷ 总流量；满槽注药时浓度按 1 − e^(−t/τ) 爬升。'],
+    [`${id}_units`]: [`单槽 ${n} · 气体溶解单元 + 热 DIW 单元`, g, 'DIW → 气体溶解单元（N₂ / O₃ 溶解水，这一版不用）→ 热 DIW 单元（加热到设定温度）→ 热 DIW 阀，在混合块下游并进主路。SPM 之后先用热水冲：硫酸黏、难冲。'],
+    [`${id}_valves`]: [`单槽 ${n} · 阀门`, g, 'V1 冷 DIW、V2 热 DIW、V3～V7 注入阀、V8 淋浴、V9 快排（大口径，在槽底侧面）、V10～V12 排液分流（酸 / 碱 / 回收）。绿色 = 开，灰色 = 关。'],
+    [`${id}_pipes`]: [`单槽 ${n} · 管路`, g, '冷 DIW 从下往上穿过混合块，热 DIW 在下游并进来，从槽底进槽；溢流、快排落进接液槽，再分到酸 / 碱 / 回收。正在流的管子按液体颜色显示；顶栏"管路图"看 2D 图。'],
+    [`${id}_mega`]: [`单槽 ${n} · 兆声振板`, g, '槽底、进液口旁边。约 1 MHz，帮忙把小颗粒冲走。这一版的配方在单槽里不开。'],
+    [`${id}_res`]: [`单槽 ${n} · 比电阻计 / 温度计`, g, '都装在槽里。比电阻判断冲洗干不干净：25 °C 纯水是 18.18 MΩ·cm，离子越多越低；冲到 ≥ 10 MΩ·cm 排水才切到回收。'],
     [`${id}_lifter`]: [`单槽 ${n} · 升降器`, g, '同药液槽的升降器。'],
   });
 }
@@ -326,38 +329,57 @@ const LIQ = {
 
 // ---------- 管路的三维：按 sim/piping.js 的数据生成 ----------
 const PIPE3D = {}, VALVE3D = {};
-const FLUID_COL = { SPM: 0xd9ae3c, H2SO4: 0xd9ae3c, SC1: 0x7ccf95, NH3: 0x7ccf95, H2O2: 0x9fd6e8, DIW: 0x3d9fe6, gas: 0xb0b8c0 };
+const FLUID_COL = {
+  SPM: 0xd9ae3c, H2SO4: 0xd9ae3c, SC1: 0x7ccf95, NH3: 0x7ccf95, H2O2: 0x9fd6e8, HF: 0xf0a0c6, HCl: 0xc7c35a,
+  DIW: 0x3d9fe6, HDIW: 0xf08a50, RA: 0xe8d39a, RK: 0xb3e0c0, gas: 0xb0b8c0,
+};
 const PIPE_IDLE = 0xebe8de, VALVE_OPEN = 0x2fa36b, VALVE_SHUT = 0x9aa3ab;
 function buildPiping3D(id, x) {
   const t = PIPING.templates.find(tt => tt.id === id);
-  const k = s => `${id}.${s}`;
   const at = p => [x + p[0], p[1], p[2]];
-  const [pu, ht, fl] = [t.p3[k('PUMP')], t.p3[k('HTR')], t.p3[k('FLT')]];
-  addPart(`${id}_pump`, group(cylY(0.06, 0.08, MAT.pump, ...at(pu)), cylY(0.045, 0.12, MAT.pump, x + pu[0], pu[1] + 0.1, pu[2])));
-  addPart(`${id}_heater`, box(0.22, 0.1, 0.12, MAT.heater, ...at(ht)));
-  addPart(`${id}_filter`, group(cylY(0.05, 0.3, MAT.filter, ...at(fl)), cylY(0.055, 0.03, MAT.resin, x + fl[0], fl[1] + 0.16, fl[2])));
   for (const nid in t.nodes) {
-    if (t.nodes[nid].kind !== 'valve') continue;
-    const [vx, vy, vz] = at(t.p3[nid]);
-    const body = box(0.04, 0.04, 0.04, MAT.resin, vx, vy, vz);
-    const act = cylY(0.02, 0.04, MAT.steel, vx, vy + 0.04, vz);
-    addPart(`${id}_valves`, group(body, act));
-    VALVE3D[nid] = act;
+    const n = t.nodes[nid];
+    if (!t.p3[nid]) continue;
+    const [px, py, pz] = at(t.p3[nid]), sz = t.size3 && t.size3[nid];
+    if (n.kind === 'pump') addPart(`${id}_pump`, group(cylY(0.06, 0.08, MAT.pump, px, py, pz), cylY(0.045, 0.12, MAT.pump, px, py + 0.1, pz)));
+    else if (n.kind === 'heater') addPart(`${id}_heater`, box(0.22, 0.1, 0.12, MAT.heater, px, py, pz));
+    else if (n.kind === 'filter') addPart(`${id}_filter`, group(cylY(0.05, 0.3, MAT.filter, px, py, pz), cylY(0.055, 0.03, MAT.resin, px, py + 0.16, pz)));
+    else if (n.kind === 'mixer') addPart(`${id}_mix`, box(...sz, MAT.resin, px, py, pz));
+    else if (n.kind === 'unit') addPart(`${id}_units`, box(...sz, n.makes ? MAT.heater : MAT.panel, px, py, pz));
+    else if (n.kind === 'device') addPart(`${id}_mega`, box(...sz, MAT.mega, px, py, pz));
+    else if (n.kind === 'junction') addPart(`${id}_pipes`, mesh(new THREE.SphereGeometry(0.017, 12, 8), MAT.resin, px, py, pz));
+    else if (n.kind === 'valve') {
+      // 执行器默认朝上；竖管上的阀朝前（act3: 'z'），免得顶到上面的管子
+      const s = n.big ? 0.06 : 0.04, d = s / 2 + 0.02, dir = (t.act3 && t.act3[nid]) || 'y';
+      const act = dir === 'z' ? cylZ(0.02, 0.04, MAT.steel, px, py, pz + d) : cylY(0.02, 0.04, MAT.steel, px, py + d, pz);
+      addPart(`${id}_valves`, group(box(s, s, s, MAT.resin, px, py, pz), act));
+      VALVE3D[nid] = act;
+    }
   }
+  const big = nid => t.nodes[nid] && t.nodes[nid].big;
   for (const e of t.edges) {
     if (!e.r3) continue;
-    const m = pipe(e.r3.map(at), e.sys === 'supply' ? 0.008 : 0.012, MAT.resin);
+    const m = pipe(e.r3.map(at), big(e.a) || big(e.b) ? 0.02 : e.sys === 'supply' ? 0.008 : 0.012, MAT.resin);
     addPart(`${id}_pipes`, m);
     PIPE3D[e.id] = m;
   }
-  // 供液口（内槽后沿上方朝下）、接到后墙的法兰、排液总管
-  for (const e of t.edges) if (e.sys === 'supply' && e.b === k('IN')) { const p = at(e.r3[e.r3.length - 1]); addPart(`${id}_pipes`, cylY(0.012, 0.03, MAT.resin, p[0], p[1] - 0.01, p[2])); }
-  for (const e of t.edges) if (e.sys === 'supply' && e.a.startsWith('src.')) { const p = at(e.r3[0]); addPart(`${id}_pipes`, cylZ(0.02, 0.012, MAT.steel, p[0], p[1], p[2])); }
-  addPart(`${id}_pipes`, cylX(0.016, 0.56, MAT.resin, x, 0.10, -0.32));
+  // 进槽的接口、接到后墙的法兰、排液总管
+  for (const e of t.edges) if (e.r3 && e.sys === 'supply' && PIPING.nodes[e.b].kind === 'tank') { const p = at(e.r3[e.r3.length - 1]); addPart(`${id}_pipes`, cylY(0.012, 0.03, MAT.resin, p[0], p[1] - 0.01, p[2])); }
+  for (const e of t.edges) if (e.r3 && e.a.startsWith('src.')) { const p = at(e.r3[0]); addPart(`${id}_pipes`, cylZ(0.02, 0.012, MAT.steel, p[0], p[1], p[2])); }
+  for (const [hy, hz, len] of t.hdr3) addPart(`${id}_pipes`, cylX(0.016, len, MAT.resin, x, hy, hz));
 }
 function updatePiping3D(pip) {
   for (const eid in PIPE3D) PIPE3D[eid].material.color.setHex(pip.flows[eid] ? FLUID_COL[pip.flows[eid]] : PIPE_IDLE);
   for (const vid in VALVE3D) VALVE3D[vid].material.color.setHex(pip.state.open[vid] ? VALVE_OPEN : VALVE_SHUT);
+  // 单槽：接液槽底有液体在走、两侧溢流的水膜
+  for (const id of ['ob1', 'ob2']) {
+    const s = ST[id], t = PIPING.templates.find(tt => tt.id === id);
+    const f = t.edges.filter(e => e.b === `${id}.PAN`).map(e => pip.flows[e.id]).find(Boolean);
+    s.panLiq.scale.y = f ? 0.015 : 0.001;
+    if (f) s.panLiq.material.color.setHex(FLUID_COL[f]);
+    const ov = pip.flows[`${id}.TANK>${id}.PAN#L`];
+    for (const sh of s.sheets) { sh.visible = !!ov; if (ov) sh.material.color.setHex(FLUID_COL[ov]); }
+  }
 }
 
 function makeLifter(id, x) {
@@ -416,23 +438,41 @@ function buildChemBath(id, x, kind) {
   s.bubbles = makePoints(110, 0xffffff, 0.006, 0.55);
 }
 
+// 单槽的接液槽：把槽围起来（作者的概要图），两侧溢流和快排都落到这里
+const PAN_L = 0.50, PAN_W = 0.41, PAN_Y = 0.50, PAN_H = 0.45;
 function buildOneBath(id, x) {
   const s = ST[id] = { x };
   const t = quartzTank(IL, IW, IH);
   t.position.set(x, Y_BOTTOM, 0);
   addPart(`${id}_tank`, t);
+  const pan = quartzTank(PAN_L, PAN_W, PAN_H);
+  pan.position.set(x, PAN_Y, 0);
+  addPart(`${id}_pan`, pan);
   s.liquid = liquidBox(IL - 0.004, IW - 0.004, LIQ.diw, 0.3);
   s.liquid.position.set(x, Y_BOTTOM, 0);
   scene.add(s.liquid);
-  addPart(`${id}_inlet`, group(cylX(0.01, 0.32, MAT.resin, x, Y_BOTTOM + 0.015, 0.09), cylX(0.01, 0.32, MAT.resin, x, Y_BOTTOM + 0.015, -0.09),
-    pipe([[x - 0.16, Y_BOTTOM + 0.015, 0.09], [x - 0.2, Y_BOTTOM + 0.015, 0.09], [x - 0.2, 0.35, 0.09], [x - 0.2, 0.35, -0.1]], 0.01, MAT.resin)));
-  addPart(`${id}_qdr`, group(cylY(0.05, 0.08, MAT.resin, x + 0.08, Y_BOTTOM - 0.06, 0), box(0.08, 0.06, 0.08, MAT.dark, x + 0.08, Y_BOTTOM - 0.13, 0),
-    pipe([[x + 0.08, Y_BOTTOM - 0.16, 0], [x + 0.08, 0.12, 0], [x + 0.08, 0.12, 0.2]], 0.03, MAT.resin)));
+  s.panLiq = liquidBox(PAN_L - 0.004, PAN_W - 0.004, LIQ.diw, 0.4);
+  s.panLiq.position.set(x, PAN_Y, 0);
+  scene.add(s.panLiq);
+  // 两侧溢流：越过槽口、顺着槽外壁流下去的水膜（示意）
+  s.sheets = [-1, 1].map(side => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(IW - 0.02, 0.3), see(0x3d9fe6, 0.28));
+    m.rotation.y = Math.PI / 2;
+    m.position.set(x + side * (IL / 2 + 0.012), Y_TOP - 0.15, 0);
+    m.material.userData.noPick = true;
+    m.visible = false;
+    scene.add(m);
+    return m;
+  });
+  // 槽底进液分配管：进液口在槽底后角，沿两条长边往片间送液
+  addPart(`${id}_inlet`, group(cylX(0.009, 0.3, MAT.resin, x, Y_BOTTOM + 0.012, -0.155), cylX(0.009, 0.3, MAT.resin, x, Y_BOTTOM + 0.012, 0.155), cylZ(0.009, 0.31, MAT.resin, x - 0.15, Y_BOTTOM + 0.012, 0)));
   addPart(`${id}_shower`, group(cylX(0.009, 0.34, MAT.resin, x, Y_TOP + 0.07, IW / 2 + 0.03), cylX(0.009, 0.34, MAT.resin, x, Y_TOP + 0.07, -IW / 2 - 0.03),
-    pipe([[x + 0.17, Y_TOP + 0.07, IW / 2 + 0.03], [x + 0.21, Y_TOP + 0.07, IW / 2 + 0.03], [x + 0.21, CAB_Y, IW / 2 + 0.03]], 0.008, MAT.resin)));
-  addPart(`${id}_mix`, group(box(0.2, 0.08, 0.08, MAT.resin, x - 0.12, 0.45, -0.2),
-    cylY(0.012, 0.04, MAT.green, x - 0.19, 0.51, -0.2), cylY(0.012, 0.04, MAT.amber, x - 0.14, 0.51, -0.2), cylY(0.012, 0.04, MAT.blue, x - 0.09, 0.51, -0.2), cylY(0.012, 0.04, MAT.red, x - 0.04, 0.51, -0.2)));
-  addPart(`${id}_res`, group(cylY(0.007, 0.3, MAT.resin, x + IL / 2 - 0.02, Y_TOP - 0.1, IW / 2 - 0.02), box(0.06, 0.05, 0.04, MAT.dark, x + IL / 2 - 0.02, Y_TOP + 0.07, IW / 2 - 0.02)));
+    cylZ(0.009, IW + 0.06, MAT.resin, x - 0.17, Y_TOP + 0.07, 0)));
+  addPart(`${id}_mega`, box(0.1, 0.08, 0.1, MAT.dark, x - 0.2, 0.42, 0.12));     // 兆声发生器（振板按管路数据画）
+  addPart(`${id}_res`, group(cylY(0.007, 0.3, MAT.resin, x + IL / 2 - 0.02, Y_TOP - 0.1, IW / 2 - 0.02), box(0.06, 0.05, 0.04, MAT.dark, x + IL / 2 - 0.02, Y_TOP + 0.07, IW / 2 - 0.02),
+    cylY(0.006, 0.3, MAT.steel, x + IL / 2 - 0.02, Y_TOP - 0.1, -IW / 2 + 0.05)));
+  // 冷 / 热 DIW、注药、淋浴、快排、排液分流：按 sim/piping.js 的同一份数据生成（和 2D 管路图一致）
+  buildPiping3D(id, x);
   s.lifter = makeLifter(id, x);
   s.bubbles = makePoints(130, 0xffffff, 0.006, 0.6);
   s.shower = makePoints(120, 0x9fd8ff, 0.007, 0.8);
@@ -487,7 +527,6 @@ buildOneBath('ob1', X.ob1);
 buildChemBath('cb2', X.cb2, 'SC1');
 buildOneBath('ob2', X.ob2);
 buildDryer('dr', X.dr);
-addPart('hot_diw', group(box(0.3, 0.2, 0.2, MAT.heater, (X.ob1 + X.cb2) / 2, 0.22, -0.12), pipe([[(X.ob1 + X.cb2) / 2, 0.32, -0.12], [(X.ob1 + X.cb2) / 2, 0.36, -0.2], [X.ob1 - 0.2, 0.36, -0.2]], 0.01, MAT.resin)));
 const chuckSpray = makePoints(90, 0xa6dcff, 0.006, 0.8);
 
 // 标签
@@ -1140,115 +1179,178 @@ function svgEl(tag, attrs, parent, text) {
 }
 let pidView = 'cb1', PE = null, pidSel = null;
 const pidTemplate = () => PIPING.templates.find(t => t.id === pidView);
+const DRAIN_NAME = { V_DA: '酸排液', V_DK: '碱排液', V_DREC: '回收' };
 function renderPid() {
   const svg = $('#pidSvg');
   svg.innerHTML = '';
-  const t = pidTemplate();
-  const k = s => `${t.id}.${s}`;
-  PE = { edges: {}, valves: {}, pump: null, heater: null, inLiq: null, outLiq: null, inst: {}, sym: {} };
+  const t = pidTemplate(), B = t.box2;
+  PE = { edges: {}, layer: null, valves: {}, pump: null, heater: null, inLiq: null, outLiq: null, inst: {}, sym: {} };
+  const addSym = (id, el) => { (PE.sym[id] ||= []).push(el); return el; };
   const mk = svgEl('marker', { id: 'arr', viewBox: '0 0 10 10', refX: 8, refY: 5, markerWidth: 6, markerHeight: 6, orient: 'auto-start-reverse' }, svgEl('defs', {}, svg));
   svgEl('path', { d: 'M0,0 L10,5 L0,10 z', fill: '#7d8790' }, mk);
-  // 槽：照作者的概要图，内槽画在外槽里面，供液从上方进内槽
-  const [ox, oy, ow, oh] = t.box2.out, [ix, iy, iw, ih] = t.box2.in;
-  const gO = svgEl('g', { class: 'cmp', 'data-id': k('OUT') }, svg);
-  PE.sym[k('OUT')] = svgEl('rect', { x: ox, y: oy, width: ow, height: oh, class: 'tank' }, gO);
+  // 槽：照作者的概要图，内槽（单槽是槽本体）画在外槽（单槽是接液槽）里面
+  const [ox, oy, ow, oh] = B.out, [ix, iy, iw, ih] = B.in;
+  const gO = svgEl('g', { class: 'cmp', 'data-id': B.outId }, svg);
+  addSym(B.outId, svgEl('rect', { x: ox, y: oy, width: ow, height: oh, class: 'tank' }, gO));
   PE.outLiq = svgEl('rect', { x: ox + 1, y: oy + oh - 1, width: ow - 2, height: 0, opacity: 0.45 }, gO);
-  svgEl('text', { x: ox + ow - 5, y: oy + oh - 6, 'text-anchor': 'end', class: 'lbl' }, gO, '外槽');
-  const gI = svgEl('g', { class: 'cmp', 'data-id': k('IN') }, svg);
-  PE.sym[k('IN')] = svgEl('rect', { x: ix, y: iy, width: iw, height: ih, class: 'tank' }, gI);
+  svgEl('text', { x: B.outLabelAt[0], y: B.outLabelAt[1], 'text-anchor': B.outLabelAt[2], class: 'lbl' }, gO, B.outLabel);
+  const gI = svgEl('g', { class: 'cmp', 'data-id': B.inId }, svg);
+  addSym(B.inId, svgEl('rect', { x: ix, y: iy, width: iw, height: ih, class: 'tank' }, gI));
   PE.inLiq = svgEl('rect', { x: ix + 1, y: iy + ih - 1, width: iw - 2, height: 0, opacity: 0.5 }, gI);
-  svgEl('text', { x: ix + iw / 2, y: iy + ih - 8, 'text-anchor': 'middle', class: 'lbl' }, gI, '内槽（晶圆）');
-  // 管段
+  svgEl('text', { x: ix + iw / 2, y: iy + ih - 8, 'text-anchor': 'middle', class: 'lbl' }, gI, B.inLabel);
+  // 管段放在同一层：开始流的管子挪到这一层最上面（几条管共用一段时不被没在流的盖住）
+  PE.layer = svgEl('g', {}, svg);
   for (const e of t.edges) {
-    PE.edges[e.id] = svgEl('polyline', { points: e.r2.map(p => p.join(',')).join(' '), class: 'pe' + (e.sys === 'exhaust' ? ' ex' : ''), 'marker-end': 'url(#arr)' }, svg);
+    PE.edges[e.id] = svgEl('polyline', { points: e.r2.map(p => p.join(',')).join(' '), class: 'pe' + (e.sys === 'exhaust' ? ' ex' : ''), 'marker-end': 'url(#arr)' }, PE.layer);
   }
-  // 公共设施接口
+  // 公共设施接口（同一个接口可以画在几处，例如 DIW）
   for (const fid in t.fac) {
-    const [fx, fy] = t.fac[fid];
-    const g = svgEl('g', { class: 'cmp', 'data-id': fid }, svg);
-    PE.sym[fid] = svgEl('rect', { x: fx - 24, y: fy - 9, width: 48, height: 18, rx: 4, class: 'fac' }, g);
-    svgEl('text', { x: fx, y: fy + 4, 'text-anchor': 'middle', style: 'font-size:11px' }, g, PIPING.nodes[fid].label);
+    const pos = Array.isArray(t.fac[fid][0]) ? t.fac[fid] : [t.fac[fid]];
+    for (const [fx, fy] of pos) {
+      const g = svgEl('g', { class: 'cmp', 'data-id': fid }, svg);
+      addSym(fid, svgEl('rect', { x: fx - 24, y: fy - 9, width: 48, height: 18, rx: 4, class: 'fac' }, g));
+      svgEl('text', { x: fx, y: fy + 4, 'text-anchor': 'middle', style: 'font-size:11px' }, g, PIPING.nodes[fid].label);
+    }
   }
   // 元件（符号参考 ISA 5.1 的通用画法）
   for (const nid in t.nodes) {
     const n = t.nodes[nid];
+    if (n.kind === 'device') {
+      const [rx, ry, rw, rh] = n.rect, g = svgEl('g', { class: 'cmp', 'data-id': nid }, svg);
+      addSym(nid, svgEl('rect', { x: rx, y: ry, width: rw, height: rh, class: 'sym', fill: 'var(--muted)' }, g));
+      svgEl('text', { x: rx + rw / 2, y: ry + rh + 12, 'text-anchor': 'middle', class: 'lbl', style: 'font-size:10px' }, g, n.label);
+      continue;
+    }
     if (!n.at) continue;
     const [x, y] = n.at;
     const g = svgEl('g', { class: 'cmp', 'data-id': nid }, svg);
     if (n.kind === 'valve') {
-      PE.valves[nid] = PE.sym[nid] = svgEl('path', { d: `M${x - 10},${y - 7} L${x - 10},${y + 7} L${x + 10},${y - 7} L${x + 10},${y + 7} Z`, class: 'sym' }, g);
-      svgEl('line', { x1: x, y1: y, x2: x, y2: y - 12, class: 'sym' }, g);
-      svgEl('rect', { x: x - 6, y: y - 18, width: 12, height: 6, class: 'sym', fill: 'none' }, g);
-      svgEl('text', { x: x + 13, y: y - 8, class: 'tag' }, g, n.tag);
+      // 竖管上的阀（rot）整个转 90°，执行器朝右
+      const v = svgEl('g', n.rot ? { transform: `rotate(90 ${x} ${y})` } : {}, g);
+      PE.valves[nid] = addSym(nid, svgEl('path', { d: `M${x - 10},${y - 7} L${x - 10},${y + 7} L${x + 10},${y - 7} L${x + 10},${y + 7} Z`, class: 'sym' }, v));
+      svgEl('line', { x1: x, y1: y, x2: x, y2: y - 12, class: 'sym' }, v);
+      svgEl('rect', { x: x - 6, y: y - 18, width: 12, height: 6, class: 'sym', fill: 'none' }, v);
+      svgEl('text', n.rot ? { x: x + 22, y: y + 4, class: 'tag' } : { x: x + 13, y: y - 8, class: 'tag' }, g, n.tag);
     } else if (n.kind === 'pump') {
-      PE.pump = PE.sym[nid] = svgEl('circle', { cx: x, cy: y, r: 14, class: 'sym' }, g);
+      PE.pump = addSym(nid, svgEl('circle', { cx: x, cy: y, r: 14, class: 'sym' }, g));
       svgEl('path', { d: `M${x - 8},${y - 5} L${x + 8},${y - 5} L${x},${y + 9} Z`, fill: 'none', class: 'sym' }, g);
       svgEl('text', { x: x - 20, y: y + 4, 'text-anchor': 'end', class: 'lbl' }, g, '循环泵');
     } else if (n.kind === 'heater') {
-      PE.heater = PE.sym[nid] = svgEl('rect', { x: x - 28, y: y - 9, width: 56, height: 18, class: 'sym' }, g);
+      PE.heater = addSym(nid, svgEl('rect', { x: x - 28, y: y - 9, width: 56, height: 18, class: 'sym' }, g));
       svgEl('polyline', { points: `${x - 22},${y} ${x - 15},${y - 6} ${x - 7},${y + 6} ${x},${y - 6} ${x + 7},${y + 6} ${x + 15},${y - 6} ${x + 22},${y}`, fill: 'none', class: 'sym' }, g);
       svgEl('text', { x, y: y + 24, 'text-anchor': 'middle', class: 'lbl' }, g, '加热器');
     } else if (n.kind === 'filter') {
-      PE.sym[nid] = svgEl('path', { d: `M${x},${y - 16} L${x + 16},${y} L${x},${y + 16} L${x - 16},${y} Z`, class: 'sym', fill: 'var(--panel)' }, g);
+      addSym(nid, svgEl('path', { d: `M${x},${y - 16} L${x + 16},${y} L${x},${y + 16} L${x - 16},${y} Z`, class: 'sym', fill: 'var(--panel)' }, g));
       svgEl('line', { x1: x, y1: y - 16, x2: x, y2: y + 16, class: 'sym', 'stroke-dasharray': '3 2' }, g);
       svgEl('text', { x: x + 20, y: y + 4, class: 'lbl' }, g, '过滤器');
+    } else if (n.kind === 'mixer') {
+      const [rx, ry, rw, rh] = n.rect;
+      addSym(nid, svgEl('rect', { x: rx, y: ry, width: rw, height: rh, class: 'sym', fill: 'var(--panel)' }, g));
+      svgEl('text', { x: rx + rw + 5, y: ry + rh / 2 + 4, class: 'lbl' }, g, n.label);
+    } else if (n.kind === 'unit') {
+      addSym(nid, svgEl('rect', { x: x - 24, y: y - 12, width: 48, height: 24, rx: 3, class: 'sym', fill: 'var(--panel)' }, g));
+      svgEl('text', { x, y: y + 4, 'text-anchor': 'middle', style: 'font-size:10px' }, g, n.short);
+    } else if (n.kind === 'junction') {
+      svgEl('circle', { cx: x, cy: y, r: 9, fill: 'transparent' }, g);     // 点的范围大一点，好点中
+      addSym(nid, svgEl('circle', { cx: x, cy: y, r: 3.5, class: 'sym', fill: 'var(--fg)' }, g));
+    } else if (n.kind === 'nozzle') {
+      addSym(nid, svgEl('path', { d: `M${x - 8},${y - 8} L${x + 8},${y - 8} L${x},${y + 4} Z`, class: 'sym', fill: 'var(--panel)' }, g));
+      svgEl('text', { x: x + 12, y: y, class: 'lbl' }, g, n.label);
     }
   }
   // 仪表
   for (const it of t.inst) {
     const [x, y] = it.at, on = t.nodes[it.on];
-    const tg = on.at || [ox + ow, y];
+    const tg = it.to || on.at || [ox + ow, y];
     svgEl('line', { x1: x, y1: y, x2: tg[0], y2: tg[1], class: 'lead' }, svg);
     svgEl('circle', { cx: x, cy: y, r: 13, class: 'inst' }, svg);
     svgEl('text', { x, y: y + 3.5, 'text-anchor': 'middle', class: 'tag' }, svg, it.tag);
     PE.inst[it.tag] = svgEl('text', { x: x + 17, y: y + 4, class: 'tag' }, svg, '');
   }
   pidSel = null;
-  $('#pidLeg').innerHTML = ['SPM', 'SC1', 'H2SO4', 'NH3', 'H2O2', 'DIW'].map(f => `<span><i style="background:${hexStr(FLUID_COL[f])}"></i>${FLUID_NAME[f]}</span>`).join('')
-    + `<span><i style="background:${hexStr(VALVE_OPEN)}"></i>阀门开 / 泵运行</span><span><i style="background:#e08a4a"></i>加热器开</span><span><i style="background:#9aa3ab"></i>没在流</span>`;
+  $('#pidLeg').innerHTML = t.legend.map(f => `<span><i style="background:${hexStr(FLUID_COL[f])}"></i>${FLUID_NAME[f]}</span>`).join('')
+    + `<span><i style="background:${hexStr(VALVE_OPEN)}"></i>阀门开${t.type === 'chembath' ? ' / 泵运行' : ''}</span>`
+    + (t.type === 'chembath' ? '<span><i style="background:#e08a4a"></i>加热器开</span>' : '') + '<span><i style="background:#9aa3ab"></i>没在流</span>';
+  $('#pidEx').hidden = t.type !== 'chembath';
+  $('#pidTip').textContent = t.type === 'chembath'
+    ? '点阀门、泵、加热器、过滤器看它是干什么的。正在流的管子按液体颜色显示，虚线往流动方向走。'
+    : '单槽每批现配、用完排掉，没有换液；阀门跟着跑批走（第 5～8 步）。点阀门、混合块、接液槽看它是干什么的；注意排液分流什么时候从酸 / 碱切到回收。';
+}
+function setLiq(el, box, frac, col) {
+  const [, y, , h] = box, hh = frac * (h - 2);
+  el.setAttribute('y', y + h - 1 - hh); el.setAttribute('height', hh); el.style.fill = col;
 }
 function updatePid(pip) {
   if ($('#pid').hidden || !PE) return;
-  const t = pidTemplate(), cb = L[t.id];
+  const t = pidTemplate();
   for (const eid in PE.edges) {
-    const f = pip.flows[eid], el = PE.edges[eid];
+    const f = pip.flows[eid] || '', el = PE.edges[eid];
+    if (el.dataset.f === f) continue;     // 只在变化时改：重新插进 DOM 会让流动动画从头开始
+    el.dataset.f = f;
     el.classList.toggle('flow', !!f);
     el.style.stroke = f ? hexStr(FLUID_COL[f]) : '';
+    if (f) PE.layer.appendChild(el);
   }
   for (const vid in PE.valves) PE.valves[vid].style.fill = pip.state.open[vid] ? hexStr(VALVE_OPEN) : 'var(--panel)';
-  PE.pump.style.fill = cb.pump ? hexStr(VALVE_OPEN) : 'var(--panel)';
-  PE.heater.style.fill = cb.heater ? '#e08a4a' : 'var(--panel)';
-  const fl = cb.fluid(), fcol = fl ? hexStr(FLUID_COL[fl]) : 'none';
-  const [, iy, , ih] = t.box2.in, [, oy, , oh] = t.box2.out;
-  const hi = cb.innerLevel * (ih - 2), ho = cb.outerLevel * 110;
-  PE.inLiq.setAttribute('y', iy + ih - 1 - hi); PE.inLiq.setAttribute('height', hi); PE.inLiq.style.fill = fcol;
-  PE.outLiq.setAttribute('y', oy + oh - 1 - ho); PE.outLiq.setAttribute('height', ho); PE.outLiq.style.fill = fcol;
-  PE.inst.TT.textContent = `${cb.T.toFixed(1)} °C`;
-  PE.inst.LT.textContent = `${(cb.outerLevel * 100).toFixed(0)} %`;
-  PE.inst.PDT.textContent = cb.pump ? '25 kPa（示意）' : '0';
-  const last = cb.interlockLog[cb.interlockLog.length - 1];
-  $('#pidInfo').textContent = `${FLUID_NAME[fl] || '空'} · 泵${cb.pump ? '运行' : '停'} · 加热器${cb.heater ? '开' : '关'} · ${cb.T.toFixed(1)} / ${cb.Tset} °C · 内槽 ${(cb.innerLevel * 100).toFixed(0)}% · 外槽 ${(cb.outerLevel * 100).toFixed(0)}%`
-    + (last ? ` · 联锁：${last}` : '') + (pip.bad.length ? ` · ⚠ ${pip.bad[0]}` : '');
-  const ex = $('#pidEx');
-  ex.disabled = !L.canMaintain;
-  ex.textContent = L.task ? '换液中…' : '换液（演示）';
+  const bad = pip.bad.filter(b => b.startsWith(t.id + '.') || b.startsWith(t.id + '：'));
+  const tail = bad.length ? ` · ⚠ ${bad[0]}` : '';
+  if (t.type === 'chembath') {
+    const cb = L[t.id];
+    PE.pump.style.fill = cb.pump ? hexStr(VALVE_OPEN) : 'var(--panel)';
+    PE.heater.style.fill = cb.heater ? '#e08a4a' : 'var(--panel)';
+    const fl = cb.fluid(), fcol = fl ? hexStr(FLUID_COL[fl]) : 'none';
+    setLiq(PE.inLiq, t.box2.in, cb.innerLevel, fcol);
+    setLiq(PE.outLiq, t.box2.out, cb.outerLevel * 110 / (t.box2.out[3] - 2), fcol);
+    PE.inst.TT.textContent = `${cb.T.toFixed(1)} °C`;
+    PE.inst.LT.textContent = `${(cb.outerLevel * 100).toFixed(0)} %`;
+    PE.inst.PDT.textContent = cb.pump ? '25 kPa（示意）' : '0';
+    const last = cb.interlockLog[cb.interlockLog.length - 1];
+    $('#pidInfo').textContent = `${FLUID_NAME[fl] || '空'} · 泵${cb.pump ? '运行' : '停'} · 加热器${cb.heater ? '开' : '关'} · ${cb.T.toFixed(1)} / ${cb.Tset} °C · 内槽 ${(cb.innerLevel * 100).toFixed(0)}% · 外槽 ${(cb.outerLevel * 100).toFixed(0)}%`
+      + (last ? ` · 联锁：${last}` : '') + tail;
+    const ex = $('#pidEx');
+    ex.disabled = !L.canMaintain;
+    ex.textContent = L.task ? '换液中…' : '换液（演示）';
+  } else {
+    const ob = L[t.id], fl = ob.fluid();
+    setLiq(PE.inLiq, t.box2.in, ob.level, fl ? hexStr(FLUID_COL[fl]) : 'none');
+    // 接液槽不存液：有液体落进来时画一薄层
+    const pf = t.edges.filter(e => e.b === t.box2.outId).map(e => pip.flows[e.id]).find(Boolean);
+    setLiq(PE.outLiq, t.box2.out, pf ? 0.05 : 0, pf ? hexStr(FLUID_COL[pf]) : 'none');
+    PE.inst.AT.textContent = `${fmtRho(ob.rho)} MΩ·cm`;
+    PE.inst.TT.textContent = `${ob.T.toFixed(1)} °C`;
+    PE.inst.FT.textContent = `${ob.Q.toFixed(0)} L/min`;
+    const dest = Object.keys(DRAIN_NAME).find(v => pip.state.open[`${t.id}.${v}`]);
+    const doing = ob.dumping ? `快排${ob.shower ? ' + 淋浴' : ''}`
+      : ob.Q > 0 ? `供液 ${ob.Q} L/min ${ob.Tin} °C` + (ob.inject ? ` + ${FLUID_NAME[ob.inject.species]} 1:${ob.inject.ratio}` : '') : '静止';
+    $('#pidInfo').textContent = `${FLUID_NAME[fl] || '空'} · 液位 ${(ob.level * 100).toFixed(0)}% · ${ob.T.toFixed(1)} °C · 比电阻 ${fmtRho(ob.rho)} MΩ·cm · ${doing} · 排液 → ${dest ? DRAIN_NAME[dest] : '关'}` + tail;
+  }
+}
+function setPidView(id) {
+  pidView = id;
+  document.querySelectorAll('#pidTabs button').forEach(b => b.classList.toggle('on', b.dataset.t === id));
+  renderPid(); updatePid(L.piping());
+}
+// 跟着晶圆：晶圆在哪个槽里，管路图就切到哪个槽
+function followPid() {
+  if ($('#pid').hidden || !$('#pidFollow').checked) return;
+  const h = L.batch.holder;
+  if (h !== pidView && PIPING.templates.some(t => t.id === h)) setPidView(h);
 }
 $('#pidBtn').addEventListener('click', () => { const p = $('#pid'); p.hidden = !p.hidden; if (!p.hidden) { renderPid(); updatePid(L.piping()); } });
 $('#pidClose').addEventListener('click', () => { $('#pid').hidden = true; });
 $('#pidTabs').addEventListener('click', e => {
   const t = e.target.dataset.t;
   if (!t) return;
-  pidView = t;
-  document.querySelectorAll('#pidTabs button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
-  renderPid(); updatePid(L.piping());
+  $('#pidFollow').checked = false;     // 自己点了就不再自动切
+  setPidView(t);
 });
 $('#pidSvg').addEventListener('click', e => {
   const g = e.target.closest('.cmp');
-  if (pidSel && PE.sym[pidSel]) PE.sym[pidSel].classList.remove('sel');
+  if (pidSel && PE.sym[pidSel]) PE.sym[pidSel].forEach(el => el.classList.remove('sel'));
   if (!g) { pidSel = null; return; }
   const id = g.dataset.id, n = PIPING.nodes[id];
   pidSel = id;
-  if (PE.sym[id]) PE.sym[id].classList.add('sel');
+  if (PE.sym[id]) PE.sym[id].forEach(el => el.classList.add('sel'));
   const role = n.role || (n.kind === 'source' ? '公共设施的供应接口' : n.kind === 'sink' ? '公共设施的出口' : '');
   $('#pidTip').innerHTML = `<b>${n.tag ? n.tag + ' ' : ''}${n.label}</b>　${role}`;
 });
@@ -1323,6 +1425,7 @@ function frameBody(now) {
     $('#time').textContent = fmtTime(L.t - chartT0);
     const pip = L.piping();
     updatePiping3D(pip);
+    followPid();
     updatePid(pip);
     if (L.busy && L.task) {
       $('#caption').innerHTML = `<b>${L.task}（演示）</b><span class="ph">${L.phase}</span>`;

@@ -11,10 +11,10 @@ import { Dryer } from './dryer.js';
 import { Surface } from './surface.js';
 import { DEFAULT } from './recipe.js';
 import { SPECIES } from './chem.js';
-import { buildGraph, chemBathTemplate, computeFlows, chemBathState, checkInterlocks, FLUID_NAME } from './piping.js';
+import { buildGraph, chemBathTemplate, oneBathTemplate, computeFlows, chemBathState, oneBathState, checkInterlocks, FLUID_NAME } from './piping.js';
 
-// 管路（现在只有药液槽的模板，见 docs/管路.md）
-export const PIPING = buildGraph([chemBathTemplate('cb1', 'SPM'), chemBathTemplate('cb2', 'SC1')]);
+// 管路（药液槽、单槽的模板，见 docs/管路.md；减压干燥槽、夹爪清洗干燥位以后再做）
+export const PIPING = buildGraph([chemBathTemplate('cb1', 'SPM'), oneBathTemplate('ob1'), chemBathTemplate('cb2', 'SC1'), oneBathTemplate('ob2')]);
 
 const NAME = STATION_NAME;
 const isCb = id => id === 'cb1' || id === 'cb2';
@@ -434,8 +434,10 @@ export class Line {
     const state = { open: {}, run: {}, tank: {}, heater: {} };
     chemBathState('cb1', this.cb1, state);
     chemBathState('cb2', this.cb2, state);
-    const flows = computeFlows(PIPING, state);
-    return { state, flows, bad: checkInterlocks(PIPING, state, flows) };
+    oneBathState('ob1', this.ob1, state);
+    oneBathState('ob2', this.ob2, state);
+    const { flows, blocked } = computeFlows(PIPING, state);
+    return { state, flows, blocked, bad: checkInterlocks(PIPING, state, flows, blocked) };
   }
 
   startStep(i) {
@@ -510,7 +512,7 @@ export class Line {
     if (inLiq) {
       if (tank === 'cb1') this.surf.inSPM(dt, this.cb1.T);
       else if (tank === 'cb2') this.surf.inSC1(dt, this.cb2);
-      else if (isOb(tank)) this.surf.inONB(dt, this[tank].c);
+      else if (isOb(tank)) this.surf.inOneBath(dt, this[tank].c);
     }
     // 快排时晶圆露出液面：每次快排记一次
     for (const id of ['ob1', 'ob2']) {

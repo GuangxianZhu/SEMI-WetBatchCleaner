@@ -24,6 +24,7 @@ export const P = {
   ambientC: 25,
   tauLossS: 10000,       // 槽液自然散热时间常数（集总热容估算）
   rhoEveryS: 0.5,        // 比电阻每隔多久算一次（过程时间）
+  reclaimRho: 10,        // 比电阻高于这个（MΩ·cm）、药液也几乎没有了，排水才切到 DIW 回收（原创值）
 
   // ---- 药液原液浓度 mol/L（49 % HF、29 % NH₃、30 % H₂O₂、96 % H₂SO₄、37 % HCl，密度取常用值）----
   stock: { HF: 28.2, NH3: 15.3, H2O2: 9.8, H2SO4: 18.0, HCl: 12.0 },
