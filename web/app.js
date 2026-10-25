@@ -7,7 +7,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { P, TANKS, STATION_NAME } from '../sim/params.js';
-import { Line, STEPS, simulate } from '../sim/tool.js';
+import { Line, STEPS, simulate, PIPING } from '../sim/tool.js';
+import { FLUID_NAME } from '../sim/piping.js';
 import { evaluate } from '../sim/result.js';
 import { DEFAULT, PRESETS, FIELDS, sameRecipe } from '../sim/recipe.js';
 import { SURF, gammaMix, stressGPa } from '../sim/surface.js';
@@ -179,9 +180,11 @@ for (const [id, n, chem] of [['cb1', 1, 'SPM'], ['cb2', 2, 'SC1']]) {
   Object.assign(PART_INFO, {
     [`${id}_inner`]: [`药液槽 ${n} · 内槽`, g, `石英槽。晶圆泡在这里；药液从底部进、从顶部溢流到外槽。一个槽只用一种药（${chem}），药液循环反复用。`],
     [`${id}_outer`]: [`药液槽 ${n} · 外槽`, g, '接住内槽溢流出来的药液，给循环泵当缓冲。内槽表面一直在更新，浮上来的颗粒被溢流带走。'],
-    [`${id}_pump`]: [`药液槽 ${n} · 循环泵`, g, '外槽 → 过滤器 → 加热器 → 内槽底部，一直在转。'],
-    [`${id}_filter`]: [`药液槽 ${n} · 过滤器`, g, '拦住溢流带走的颗粒。压差升高说明堵了，要换（消耗件）。'],
-    [`${id}_heater`]: [`药液槽 ${n} · 加热器`, g, '把药液保持在设定温度。'],
+    [`${id}_pump`]: [`药液槽 ${n} · 循环泵`, g, '外槽 → 加热器 → 过滤器 → 内槽底部，一直在转。放在最前面：吸入侧没有阻力件，热药液不容易汽蚀。外槽液位太低时停（联锁）。'],
+    [`${id}_filter`]: [`药液槽 ${n} · 过滤器`, g, '拦住溢流带走的颗粒；放在最后，也拦住泵和加热器掉出来的颗粒。压差升高说明堵了，要换（消耗件）。'],
+    [`${id}_heater`]: [`药液槽 ${n} · 加热器`, g, '把药液保持在设定温度。泵停了必须停：没有液体流过会空烧（联锁）。'],
+    [`${id}_valves`]: [`药液槽 ${n} · 阀门`, g, '供液阀 V1～V3：DIW、药液 1、药液 2，从上方进内槽；排液阀 V4（内槽）、V5（外槽）：换液时打开。绿色 = 开，灰色 = 关。'],
+    [`${id}_pipes`]: [`药液槽 ${n} · 管路`, g, '循环线：外槽 → 泵 → 加热器 → 过滤器 → 内槽底部；供液从上方进内槽；排液到酸 / 碱排液。正在流的管子按液体颜色显示；顶栏"管路图"看 2D 图。'],
     [`${id}_lifter`]: [`药液槽 ${n} · 升降器`, g, '接片、把晶圆浸下去、提上来；带槽的导杆托住 50 片的下边缘。空着时停在下面，要交接时才升上来。'],
     [`${id}_sensors`]: [`药液槽 ${n} · 温度计 / 浓度计 / 液位计`, g, '监视温度、浓度、液位；浓度掉了就自动补液（阶段 3 做）。'],
   });
@@ -321,6 +324,42 @@ const LIQ = {
   ipa: new THREE.Color(0xa688e6),
 };
 
+// ---------- 管路的三维：按 sim/piping.js 的数据生成 ----------
+const PIPE3D = {}, VALVE3D = {};
+const FLUID_COL = { SPM: 0xd9ae3c, H2SO4: 0xd9ae3c, SC1: 0x7ccf95, NH3: 0x7ccf95, H2O2: 0x9fd6e8, DIW: 0x3d9fe6, gas: 0xb0b8c0 };
+const PIPE_IDLE = 0xebe8de, VALVE_OPEN = 0x2fa36b, VALVE_SHUT = 0x9aa3ab;
+function buildPiping3D(id, x) {
+  const t = PIPING.templates.find(tt => tt.id === id);
+  const k = s => `${id}.${s}`;
+  const at = p => [x + p[0], p[1], p[2]];
+  const [pu, ht, fl] = [t.p3[k('PUMP')], t.p3[k('HTR')], t.p3[k('FLT')]];
+  addPart(`${id}_pump`, group(cylY(0.06, 0.08, MAT.pump, ...at(pu)), cylY(0.045, 0.12, MAT.pump, x + pu[0], pu[1] + 0.1, pu[2])));
+  addPart(`${id}_heater`, box(0.22, 0.1, 0.12, MAT.heater, ...at(ht)));
+  addPart(`${id}_filter`, group(cylY(0.05, 0.3, MAT.filter, ...at(fl)), cylY(0.055, 0.03, MAT.resin, x + fl[0], fl[1] + 0.16, fl[2])));
+  for (const nid in t.nodes) {
+    if (t.nodes[nid].kind !== 'valve') continue;
+    const [vx, vy, vz] = at(t.p3[nid]);
+    const body = box(0.04, 0.04, 0.04, MAT.resin, vx, vy, vz);
+    const act = cylY(0.02, 0.04, MAT.steel, vx, vy + 0.04, vz);
+    addPart(`${id}_valves`, group(body, act));
+    VALVE3D[nid] = act;
+  }
+  for (const e of t.edges) {
+    if (!e.r3) continue;
+    const m = pipe(e.r3.map(at), e.sys === 'supply' ? 0.008 : 0.012, MAT.resin);
+    addPart(`${id}_pipes`, m);
+    PIPE3D[e.id] = m;
+  }
+  // 供液口（内槽后沿上方朝下）、接到后墙的法兰、排液总管
+  for (const e of t.edges) if (e.sys === 'supply' && e.b === k('IN')) { const p = at(e.r3[e.r3.length - 1]); addPart(`${id}_pipes`, cylY(0.012, 0.03, MAT.resin, p[0], p[1] - 0.01, p[2])); }
+  for (const e of t.edges) if (e.sys === 'supply' && e.a.startsWith('src.')) { const p = at(e.r3[0]); addPart(`${id}_pipes`, cylZ(0.02, 0.012, MAT.steel, p[0], p[1], p[2])); }
+  addPart(`${id}_pipes`, cylX(0.016, 0.56, MAT.resin, x, 0.10, -0.32));
+}
+function updatePiping3D(pip) {
+  for (const eid in PIPE3D) PIPE3D[eid].material.color.setHex(pip.flows[eid] ? FLUID_COL[pip.flows[eid]] : PIPE_IDLE);
+  for (const vid in VALVE3D) VALVE3D[vid].material.color.setHex(pip.state.open[vid] ? VALVE_OPEN : VALVE_SHUT);
+}
+
 function makeLifter(id, x) {
   const g = new THREE.Group();
   g.add(cylX(0.006, 0.30, MAT.lifter, 0, -0.156, 0));
@@ -358,17 +397,11 @@ function buildChemBath(id, x, kind) {
   s.outerLiq.position.set(x, y0 + 0.003, 0);
   s.outerLiq.scale.y = 0.05;
   scene.add(s.outerLiq);
-  // 循环线：外槽底 → 泵 → 过滤器 → 加热器 → 内槽底
-  addPart(`${id}_pump`, group(cylY(0.06, 0.12, MAT.pump, x - 0.13, 0.2, 0.12), cylZ(0.035, 0.08, MAT.pump, x - 0.13, 0.2, 0.2)));
-  addPart(`${id}_filter`, group(cylY(0.05, 0.3, MAT.filter, x + 0.12, 0.3, 0.12), cylY(0.055, 0.03, MAT.resin, x + 0.12, 0.47, 0.12)));
-  addPart(`${id}_heater`, box(0.22, 0.1, 0.12, MAT.heater, x, 0.42, -0.14));
-  scene.add(pipe([[x - IL / 2 - 0.03, y0, IW / 2 + 0.03], [x - 0.2, y0 - 0.05, 0.22], [x - 0.2, 0.2, 0.22], [x - 0.13, 0.2, 0.22]], 0.012, MAT.resin));
-  scene.add(pipe([[x - 0.07, 0.2, 0.12], [x + 0.12, 0.13, 0.12], [x + 0.12, 0.15, 0.12]], 0.012, MAT.resin));
-  scene.add(pipe([[x + 0.12, 0.47, 0.12], [x + 0.12, 0.52, 0.0], [x + 0.11, 0.42, -0.14]], 0.012, MAT.resin));
-  scene.add(pipe([[x - 0.11, 0.42, -0.14], [x - 0.05, Y_BOTTOM - 0.02, -0.05], [x, Y_BOTTOM - 0.003, 0]], 0.012, MAT.resin));
-  addPart(`${id}_sensors`, group(cylY(0.006, 0.42, MAT.resin, x + IL / 2 - 0.02, Y_TOP - 0.15, -IW / 2 + 0.02), cylY(0.006, 0.36, MAT.steel, x + IL / 2 - 0.04, Y_TOP - 0.12, -IW / 2 + 0.02)));
+  // 循环线、供液、排液：按 sim/piping.js 的同一份数据生成（和 2D 管路图一致）
+  buildPiping3D(id, x);
+  addPart(`${id}_sensors`, group(cylY(0.006, 0.42, MAT.resin, x + IL / 2 - 0.02, Y_TOP - 0.15, IW / 2 - 0.02), cylY(0.006, 0.36, MAT.steel, x + IL / 2 - 0.045, Y_TOP - 0.12, IW / 2 - 0.02)));
   if (kind === 'SC1') {
-    addPart(`${id}_mega`, group(box(0.3, 0.025, 0.3, MAT.mega, x, Y_BOTTOM - 0.02, 0), box(0.2, 0.14, 0.14, MAT.dark, x + 0.05, 0.18, -0.15)));
+    addPart(`${id}_mega`, group(box(0.3, 0.025, 0.3, MAT.mega, x, Y_BOTTOM - 0.02, 0), box(0.14, 0.12, 0.12, MAT.dark, x - 0.15, 0.45, -0.15)));
     s.rings = [0, 1, 2].map(i => {
       const r = new THREE.Mesh(new THREE.RingGeometry(0.08, 0.1, 40), see(0xffffff, 0.0));
       r.rotation.x = -Math.PI / 2;
@@ -808,7 +841,7 @@ function drawPattern() {
 
 // ================= 面板：趋势图 =================
 const samples = [];
-let lastSample = -1;
+let lastSample = -1, chartT0 = 0;   // chartT0：这一批（或这次换液）开始的时刻
 const SERIES = [
   { name: '槽温', unit: '°C', min: 20, max: 150, lines: [['cb1', '#d9ae3c', () => L.cb1.T], ['cb2', '#3faa66', () => L.cb2.T], ['ob1', '#2f8fd6', () => L.ob1.T], ['ob2', '#17a2a2', () => L.ob2.T]] },
   { name: '比电阻', unit: 'MΩ·cm', log: true, min: 0.01, max: 20, lines: [['ob1', '#2f8fd6', () => L.ob1.rho], ['ob2', '#17a2a2', () => L.ob2.rho]] },
@@ -817,15 +850,15 @@ const SERIES = [
   { name: '干燥槽', unit: '', min: 0, max: 1, lines: [['O₂/21%', '#d64545', () => L.dr.o2 / 21], ['IPA', '#8a6fe0', () => L.dr.ipa], ['压力/大气压', '#5b6875', () => L.dr.pressure / 101.3]] },
 ];
 function recordSample() {
-  if (L.stepIdx < 0 || L.t - lastSample < 4) return;
+  if ((L.stepIdx < 0 && !taskRunning) || L.t - lastSample < 4) return;
   lastSample = L.t;
-  samples.push({ t: L.t, v: SERIES.map(s => s.lines.map(l => l[2]())) });
+  samples.push({ t: L.t - chartT0, v: SERIES.map(s => s.lines.map(l => l[2]())) });
 }
 function drawChart() {
   const c = $('#chart'), [w, h] = fitCanvas(c), g = c.getContext('2d'), cs = css();
   const bg = cs.getPropertyValue('--chart-bg'), fg = cs.getPropertyValue('--fg'), muted = cs.getPropertyValue('--muted');
   g.clearRect(0, 0, w, h);
-  const now = Math.max(L.t, 1), win = Math.max(600, now);
+  const now = Math.max(L.t - chartT0, 1), win = Math.max(600, now);
   const left = 112, rowH = (h - 14) / SERIES.length;
   g.font = '11px ' + fontFam();
   SERIES.forEach((s, i) => {
@@ -849,7 +882,7 @@ function drawChart() {
   });
   g.fillStyle = muted;
   g.fillText(`0 ~ ${(win / 60).toFixed(0)} 分钟`, left, h - 2);
-  $('#chartInfo').textContent = L.stepIdx >= 0 ? fmtTime(L.t) : '';
+  $('#chartInfo').textContent = L.stepIdx >= 0 || taskRunning ? fmtTime(L.t - chartT0) : '';
 }
 const fmtTime = t => { const m = Math.floor(t / 60), s = Math.floor(t % 60); return `${m}:${String(s).padStart(2, '0')}`; };
 
@@ -864,13 +897,14 @@ function renderSteps() {
     li.querySelector('.d').textContent = L.stepTimes[i] != null ? fmtTime(L.stepTimes[i]) : '';
   });
   const go = $('#go');
-  if (L.done) { go.textContent = '↻ 再跑一批'; go.disabled = false; }
+  if (L.task) { go.textContent = `进行中：${L.task}（演示）…`; go.disabled = true; }
+  else if (L.done) { go.textContent = '↻ 再跑一批'; go.disabled = false; }
   else if (L.busy) { go.textContent = `进行中：${STEPS[L.stepIdx].name} …`; go.disabled = true; }
   else { const n = STEPS[L.stepIdx + 1]; go.textContent = (L.stepIdx < 0 ? '▶ 开始：' : '▶ 下一步：') + n.name; go.disabled = false; }
   const st = $('#state');
   st.className = 'pill' + (L.busy || (L.stepIdx >= 0 && !L.done) ? ' run' : L.done ? ' ok' : '');
-  st.textContent = L.done ? '完成' : L.stepIdx < 0 ? '待机' : L.busy ? `第 ${L.stepIdx + 1}/${STEPS.length} 步` : `等待第 ${L.stepIdx + 2} 步`;
-  const locked = L.stepIdx >= 0 && !L.done;
+  st.textContent = L.task ? '维护中' : L.done ? '完成' : L.stepIdx < 0 ? '待机' : L.busy ? `第 ${L.stepIdx + 1}/${STEPS.length} 步` : `等待第 ${L.stepIdx + 2} 步`;
+  const locked = L.busy || (L.stepIdx >= 0 && !L.done);
   document.querySelectorAll('#fields input, #fields select, #presets button').forEach(el => { el.disabled = locked; });
   $('#lockNote').hidden = !locked;
 }
@@ -894,7 +928,16 @@ function runStep(i) {
   if (follow()) { camTo(st.focus); lastFocus = st.focus; }
   renderSteps();
 }
+let taskRunning = false;
 function onStepDone() {
+  if (taskRunning) {
+    taskRunning = false;
+    renderSteps();
+    explain(`${L.lastTask}完成`, '新药液已经升到设定温度，循环泵和加热器在运行。可以开始跑批了。', '');
+    $('#explain .phase').textContent = '';
+    $('#caption').innerHTML = `<b>${L.lastTask}完成</b> · 点右边"▶ 开始"跑一批`;
+    return;
+  }
   renderSteps();
   if (L.done) { finish(); return; }
   if ($('#auto').checked) autoTimer = setTimeout(() => { if (!L.busy && !L.done) runStep(L.stepIdx + 1); }, 600);
@@ -902,7 +945,7 @@ function onStepDone() {
 function startOrNext() {
   if (L.busy) return;
   if (L.done) { resetAll(); return; }
-  if (L.stepIdx < 0) { samples.length = 0; lastSample = -1; }
+  if (L.stepIdx < 0) { samples.length = 0; lastSample = -1; chartT0 = L.t; }
   runStep(L.stepIdx + 1);
 }
 $('#go').addEventListener('click', startOrNext);
@@ -913,7 +956,7 @@ $('#pause').addEventListener('click', () => { paused = !paused; $('#pause').text
 function resetAll() {
   clearTimeout(autoTimer);
   L = new Line(R);
-  samples.length = 0; lastSample = -1; lastFocus = null;
+  samples.length = 0; lastSample = -1; chartT0 = 0; lastFocus = null;
   explain('准备好了', '两个 FOUP 里又放了新的晶圆。可以先到"配方"里改参数，再点"开始"。', '每次只改一两个参数，对比结果最容易看出它的作用。');
   $('#caption').innerHTML = '点右边的 <b>▶ 开始</b>，一步一步把一批 50 片晶圆洗完。';
   if (follow()) camTo('overview');
@@ -924,8 +967,8 @@ function resetAll() {
 const VALS = [
   ['现在', () => L.phase || '—'],
   ['机械手', () => L.robot.task || '—'],
-  ['药液槽 1 · SPM', () => `${L.cb1.T.toFixed(0)} °C`],
-  ['药液槽 2 · SC1', () => `${L.cb2.T.toFixed(0)} °C · 兆声${L.cb2.mega ? '开' : '关'}`],
+  ['药液槽 1 · SPM', () => `${L.cb1.T.toFixed(0)} °C · 液位 ${(L.cb1.innerLevel * 100).toFixed(0)}% · 泵${L.cb1.pump ? '开' : '停'}`],
+  ['药液槽 2 · SC1', () => `${L.cb2.T.toFixed(0)} °C · 泵${L.cb2.pump ? '开' : '停'} · 兆声${L.cb2.mega ? '开' : '关'}`],
   ['单槽 1', () => `ρ ${fmtRho(L.ob1.rho)} MΩ·cm · ${L.ob1.T.toFixed(0)} °C`],
   ['单槽 2', () => `ρ ${fmtRho(L.ob2.rho)} · HF ${L.ob2.c.HF > 1e-9 ? L.ob2.c.HF.toExponential(1) : '0'} M`],
   ['减压干燥槽', () => `O₂ ${L.dr.o2.toFixed(1)}% · ${L.dr.pressure.toFixed(0)} kPa · IPA ${(L.dr.ipa * 100).toFixed(0)}%`],
@@ -1085,6 +1128,140 @@ canvas.addEventListener('pointerup', e => {
   selectPart(null);
 });
 
+// ================= 管路图（2D，按 sim/piping.js 的同一份数据画） =================
+const NS = 'http://www.w3.org/2000/svg';
+const hexStr = n => '#' + n.toString(16).padStart(6, '0');
+function svgEl(tag, attrs, parent, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+let pidView = 'cb1', PE = null, pidSel = null;
+const pidTemplate = () => PIPING.templates.find(t => t.id === pidView);
+function renderPid() {
+  const svg = $('#pidSvg');
+  svg.innerHTML = '';
+  const t = pidTemplate();
+  const k = s => `${t.id}.${s}`;
+  PE = { edges: {}, valves: {}, pump: null, heater: null, inLiq: null, outLiq: null, inst: {}, sym: {} };
+  const mk = svgEl('marker', { id: 'arr', viewBox: '0 0 10 10', refX: 8, refY: 5, markerWidth: 6, markerHeight: 6, orient: 'auto-start-reverse' }, svgEl('defs', {}, svg));
+  svgEl('path', { d: 'M0,0 L10,5 L0,10 z', fill: '#7d8790' }, mk);
+  // 槽：照作者的概要图，内槽画在外槽里面，供液从上方进内槽
+  const [ox, oy, ow, oh] = t.box2.out, [ix, iy, iw, ih] = t.box2.in;
+  const gO = svgEl('g', { class: 'cmp', 'data-id': k('OUT') }, svg);
+  PE.sym[k('OUT')] = svgEl('rect', { x: ox, y: oy, width: ow, height: oh, class: 'tank' }, gO);
+  PE.outLiq = svgEl('rect', { x: ox + 1, y: oy + oh - 1, width: ow - 2, height: 0, opacity: 0.45 }, gO);
+  svgEl('text', { x: ox + ow - 5, y: oy + oh - 6, 'text-anchor': 'end', class: 'lbl' }, gO, '外槽');
+  const gI = svgEl('g', { class: 'cmp', 'data-id': k('IN') }, svg);
+  PE.sym[k('IN')] = svgEl('rect', { x: ix, y: iy, width: iw, height: ih, class: 'tank' }, gI);
+  PE.inLiq = svgEl('rect', { x: ix + 1, y: iy + ih - 1, width: iw - 2, height: 0, opacity: 0.5 }, gI);
+  svgEl('text', { x: ix + iw / 2, y: iy + ih - 8, 'text-anchor': 'middle', class: 'lbl' }, gI, '内槽（晶圆）');
+  // 管段
+  for (const e of t.edges) {
+    PE.edges[e.id] = svgEl('polyline', { points: e.r2.map(p => p.join(',')).join(' '), class: 'pe' + (e.sys === 'exhaust' ? ' ex' : ''), 'marker-end': 'url(#arr)' }, svg);
+  }
+  // 公共设施接口
+  for (const fid in t.fac) {
+    const [fx, fy] = t.fac[fid];
+    const g = svgEl('g', { class: 'cmp', 'data-id': fid }, svg);
+    PE.sym[fid] = svgEl('rect', { x: fx - 24, y: fy - 9, width: 48, height: 18, rx: 4, class: 'fac' }, g);
+    svgEl('text', { x: fx, y: fy + 4, 'text-anchor': 'middle', style: 'font-size:11px' }, g, PIPING.nodes[fid].label);
+  }
+  // 元件（符号参考 ISA 5.1 的通用画法）
+  for (const nid in t.nodes) {
+    const n = t.nodes[nid];
+    if (!n.at) continue;
+    const [x, y] = n.at;
+    const g = svgEl('g', { class: 'cmp', 'data-id': nid }, svg);
+    if (n.kind === 'valve') {
+      PE.valves[nid] = PE.sym[nid] = svgEl('path', { d: `M${x - 10},${y - 7} L${x - 10},${y + 7} L${x + 10},${y - 7} L${x + 10},${y + 7} Z`, class: 'sym' }, g);
+      svgEl('line', { x1: x, y1: y, x2: x, y2: y - 12, class: 'sym' }, g);
+      svgEl('rect', { x: x - 6, y: y - 18, width: 12, height: 6, class: 'sym', fill: 'none' }, g);
+      svgEl('text', { x: x + 13, y: y - 8, class: 'tag' }, g, n.tag);
+    } else if (n.kind === 'pump') {
+      PE.pump = PE.sym[nid] = svgEl('circle', { cx: x, cy: y, r: 14, class: 'sym' }, g);
+      svgEl('path', { d: `M${x - 8},${y - 5} L${x + 8},${y - 5} L${x},${y + 9} Z`, fill: 'none', class: 'sym' }, g);
+      svgEl('text', { x: x - 20, y: y + 4, 'text-anchor': 'end', class: 'lbl' }, g, '循环泵');
+    } else if (n.kind === 'heater') {
+      PE.heater = PE.sym[nid] = svgEl('rect', { x: x - 28, y: y - 9, width: 56, height: 18, class: 'sym' }, g);
+      svgEl('polyline', { points: `${x - 22},${y} ${x - 15},${y - 6} ${x - 7},${y + 6} ${x},${y - 6} ${x + 7},${y + 6} ${x + 15},${y - 6} ${x + 22},${y}`, fill: 'none', class: 'sym' }, g);
+      svgEl('text', { x, y: y + 24, 'text-anchor': 'middle', class: 'lbl' }, g, '加热器');
+    } else if (n.kind === 'filter') {
+      PE.sym[nid] = svgEl('path', { d: `M${x},${y - 16} L${x + 16},${y} L${x},${y + 16} L${x - 16},${y} Z`, class: 'sym', fill: 'var(--panel)' }, g);
+      svgEl('line', { x1: x, y1: y - 16, x2: x, y2: y + 16, class: 'sym', 'stroke-dasharray': '3 2' }, g);
+      svgEl('text', { x: x + 20, y: y + 4, class: 'lbl' }, g, '过滤器');
+    }
+  }
+  // 仪表
+  for (const it of t.inst) {
+    const [x, y] = it.at, on = t.nodes[it.on];
+    const tg = on.at || [ox + ow, y];
+    svgEl('line', { x1: x, y1: y, x2: tg[0], y2: tg[1], class: 'lead' }, svg);
+    svgEl('circle', { cx: x, cy: y, r: 13, class: 'inst' }, svg);
+    svgEl('text', { x, y: y + 3.5, 'text-anchor': 'middle', class: 'tag' }, svg, it.tag);
+    PE.inst[it.tag] = svgEl('text', { x: x + 17, y: y + 4, class: 'tag' }, svg, '');
+  }
+  pidSel = null;
+  $('#pidLeg').innerHTML = ['SPM', 'SC1', 'H2SO4', 'NH3', 'H2O2', 'DIW'].map(f => `<span><i style="background:${hexStr(FLUID_COL[f])}"></i>${FLUID_NAME[f]}</span>`).join('')
+    + `<span><i style="background:${hexStr(VALVE_OPEN)}"></i>阀门开 / 泵运行</span><span><i style="background:#e08a4a"></i>加热器开</span><span><i style="background:#9aa3ab"></i>没在流</span>`;
+}
+function updatePid(pip) {
+  if ($('#pid').hidden || !PE) return;
+  const t = pidTemplate(), cb = L[t.id];
+  for (const eid in PE.edges) {
+    const f = pip.flows[eid], el = PE.edges[eid];
+    el.classList.toggle('flow', !!f);
+    el.style.stroke = f ? hexStr(FLUID_COL[f]) : '';
+  }
+  for (const vid in PE.valves) PE.valves[vid].style.fill = pip.state.open[vid] ? hexStr(VALVE_OPEN) : 'var(--panel)';
+  PE.pump.style.fill = cb.pump ? hexStr(VALVE_OPEN) : 'var(--panel)';
+  PE.heater.style.fill = cb.heater ? '#e08a4a' : 'var(--panel)';
+  const fl = cb.fluid(), fcol = fl ? hexStr(FLUID_COL[fl]) : 'none';
+  const [, iy, , ih] = t.box2.in, [, oy, , oh] = t.box2.out;
+  const hi = cb.innerLevel * (ih - 2), ho = cb.outerLevel * 110;
+  PE.inLiq.setAttribute('y', iy + ih - 1 - hi); PE.inLiq.setAttribute('height', hi); PE.inLiq.style.fill = fcol;
+  PE.outLiq.setAttribute('y', oy + oh - 1 - ho); PE.outLiq.setAttribute('height', ho); PE.outLiq.style.fill = fcol;
+  PE.inst.TT.textContent = `${cb.T.toFixed(1)} °C`;
+  PE.inst.LT.textContent = `${(cb.outerLevel * 100).toFixed(0)} %`;
+  PE.inst.PDT.textContent = cb.pump ? '25 kPa（示意）' : '0';
+  const last = cb.interlockLog[cb.interlockLog.length - 1];
+  $('#pidInfo').textContent = `${FLUID_NAME[fl] || '空'} · 泵${cb.pump ? '运行' : '停'} · 加热器${cb.heater ? '开' : '关'} · ${cb.T.toFixed(1)} / ${cb.Tset} °C · 内槽 ${(cb.innerLevel * 100).toFixed(0)}% · 外槽 ${(cb.outerLevel * 100).toFixed(0)}%`
+    + (last ? ` · 联锁：${last}` : '') + (pip.bad.length ? ` · ⚠ ${pip.bad[0]}` : '');
+  const ex = $('#pidEx');
+  ex.disabled = !L.canMaintain;
+  ex.textContent = L.task ? '换液中…' : '换液（演示）';
+}
+$('#pidBtn').addEventListener('click', () => { const p = $('#pid'); p.hidden = !p.hidden; if (!p.hidden) { renderPid(); updatePid(L.piping()); } });
+$('#pidClose').addEventListener('click', () => { $('#pid').hidden = true; });
+$('#pidTabs').addEventListener('click', e => {
+  const t = e.target.dataset.t;
+  if (!t) return;
+  pidView = t;
+  document.querySelectorAll('#pidTabs button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  renderPid(); updatePid(L.piping());
+});
+$('#pidSvg').addEventListener('click', e => {
+  const g = e.target.closest('.cmp');
+  if (pidSel && PE.sym[pidSel]) PE.sym[pidSel].classList.remove('sel');
+  if (!g) { pidSel = null; return; }
+  const id = g.dataset.id, n = PIPING.nodes[id];
+  pidSel = id;
+  if (PE.sym[id]) PE.sym[id].classList.add('sel');
+  const role = n.role || (n.kind === 'source' ? '公共设施的供应接口' : n.kind === 'sink' ? '公共设施的出口' : '');
+  $('#pidTip').innerHTML = `<b>${n.tag ? n.tag + ' ' : ''}${n.label}</b>　${role}`;
+});
+$('#pidEx').addEventListener('click', () => {
+  if (!L.startExchange(pidView)) return;
+  taskRunning = true;
+  wasBusy = true;
+  if (L.stepIdx < 0 || L.done) { samples.length = 0; lastSample = -1; chartT0 = L.t; }
+  explain(`${L.task}（演示）`, '换液：停加热器和循环泵 → 打开排液阀排掉旧液 → 依次补 DIW、药液 1、药液 2 → 外槽液位够了开泵 → 开加热器升温。看管路图里阀门和流向怎么变。',
+    '先停泵和加热器：排液时泵会吸进空气空转，加热器没有液体流过会空烧。补液时内槽先满，再溢流到外槽；外槽液位够了才能开泵。');
+  renderSteps();
+});
+
 // ================= 主循环 =================
 function resize() {
   const w = stage.clientWidth, h = stage.clientHeight;
@@ -1143,8 +1320,14 @@ function frameBody(now) {
     uiAcc = 0;
     if (!$('#dock').hidden) { drawLine(); drawPattern(); drawChart(); }
     updateVals();
-    $('#time').textContent = fmtTime(L.t);
-    if (L.busy) {
+    $('#time').textContent = fmtTime(L.t - chartT0);
+    const pip = L.piping();
+    updatePiping3D(pip);
+    updatePid(pip);
+    if (L.busy && L.task) {
+      $('#caption').innerHTML = `<b>${L.task}（演示）</b><span class="ph">${L.phase}</span>`;
+      $('#explain .phase').textContent = '现在：' + L.phase;
+    } else if (L.busy) {
       const st = STEPS[L.stepIdx];
       $('#caption').innerHTML = `<b>第 ${L.stepIdx + 1}/${STEPS.length} 步</b> · ${st.name}<span class="ph">${L.phase}${L.robot.task && L.robot.task !== '待机' && !L.robot.holding ? ' · 机械手：' + L.robot.task : ''}</span>`;
       $('#explain .phase').textContent = '现在：' + L.phase;

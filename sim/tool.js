@@ -11,6 +11,10 @@ import { Dryer } from './dryer.js';
 import { Surface } from './surface.js';
 import { DEFAULT } from './recipe.js';
 import { SPECIES } from './chem.js';
+import { buildGraph, chemBathTemplate, computeFlows, chemBathState, checkInterlocks, FLUID_NAME } from './piping.js';
+
+// 管路（现在只有药液槽的模板，见 docs/管路.md）
+export const PIPING = buildGraph([chemBathTemplate('cb1', 'SPM'), chemBathTemplate('cb2', 'SC1')]);
 
 const NAME = STATION_NAME;
 const isCb = id => id === 'cb1' || id === 'cb2';
@@ -217,6 +221,34 @@ function* dryerSeq(L) {
   L.drying = false;
 }
 
+// ---------- 药液槽换液（维护动作，没在跑批时才能做；给管路图演示阀门和联锁） ----------
+function* bathExchange(L, id) {
+  const cb = L[id], nm = NAME[id];
+  const chemName = { DIW: 'DIW', C1: FLUID_NAME[cb.chem[0]], C2: FLUID_NAME[cb.chem[1]] };
+  L.phase = `${nm}：先停加热器和循环泵（排液时泵会空转、加热器会空烧）`;
+  cb.heater = false; cb.pump = false;
+  yield* waitS(3);
+  L.phase = `${nm}：打开内槽、外槽排液阀，排掉旧液`;
+  cb.valve.V_DR = true; cb.valve.V_DRO = true;
+  yield* until(() => cb.empty, 900);
+  cb.valve.V_DR = false; cb.valve.V_DRO = false;
+  cb.planFill();
+  for (const k of ['DIW', 'C1', 'C2']) {
+    if (cb.fillTarget[k] < 0.01) continue;
+    L.phase = `${nm}：补 ${chemName[k]} ${cb.fillTarget[k].toFixed(1)} L（从上方进内槽，满了溢流到外槽）`;
+    cb.valve[`V_${k}`] = true;
+    yield* until(() => cb.filled[k] >= cb.fillTarget[k], 1800);
+    cb.valve[`V_${k}`] = false;
+  }
+  L.phase = `${nm}：外槽液位够了，开循环泵`;
+  cb.pump = true;
+  yield* waitS(5);
+  L.phase = `${nm}：开加热器，升温到 ${cb.Tset} °C`;
+  cb.heater = true;
+  yield* until(() => cb.T >= cb.Tset - 0.05, 4 * 3600);
+  L.phase = `${nm}：换液完成`;
+}
+
 // ---------- 工艺步骤 ----------
 export const STEPS = [
   {
@@ -373,6 +405,7 @@ export class Line {
     this.violations = []; this.notes = []; this.rinseLog = [];
     this.stepIdx = -1; this.runner = null; this.stepT0 = 0; this.stepTimes = [];
     this.phase = '';
+    this.task = null; this.lastTask = null; this.batchT0 = 0;
     this.done = false;
     // 晶圆追踪：批里第 b 片来自哪个 FOUP 的哪个槽位（两盒交错合批）
     this.origin = Array.from({ length: P.nWafer }, (_, b) => ({ foup: 1 + (b % 2), slot: Math.floor(b / 2) }));
@@ -386,7 +419,28 @@ export class Line {
 
   violate(msg) { this.violations.push({ t: this.t, msg }); }
 
+  // 维护动作（例如换液）：不算工艺步骤，没在跑批时才能做
+  get canMaintain() { return !this.busy && (this.stepIdx < 0 || this.done); }
+  startExchange(id) {
+    if (!this.canMaintain) return false;
+    this.task = `${NAME[id]} 换液`;
+    this.runner = bathExchange(this, id);
+    this.runner.next(0);
+    return true;
+  }
+
+  // 管路：阀门、泵、槽的状态 → 哪些管段在流
+  piping() {
+    const state = { open: {}, run: {}, tank: {}, heater: {} };
+    chemBathState('cb1', this.cb1, state);
+    chemBathState('cb2', this.cb2, state);
+    const flows = computeFlows(PIPING, state);
+    return { state, flows, bad: checkInterlocks(PIPING, state, flows) };
+  }
+
   startStep(i) {
+    this.task = null;
+    if (i === 0) this.batchT0 = this.t;   // 这一批从这里开始计时（前面可能做过换液）
     this.stepIdx = i;
     this.stepT0 = this.t;
     this.runner = STEPS[i].run(this);
@@ -395,12 +449,16 @@ export class Line {
 
   step(dt) {
     this.t += dt;
+    this.cb1.step(dt); this.cb2.step(dt);
     this.ob1.step(dt); this.ob2.step(dt); this.dr.step(dt);
     this.bg = this.bg.filter(g => !g.next(dt).done);
     if (this.runner && this.runner.next(dt).done) {
       this.runner = null;
-      this.stepTimes[this.stepIdx] = this.t - this.stepT0;
-      if (this.stepIdx === STEPS.length - 1) this.done = true;
+      if (this.task) { this.lastTask = this.task; this.task = null; }
+      else {
+        this.stepTimes[this.stepIdx] = this.t - this.stepT0;
+        if (this.stepIdx === STEPS.length - 1) this.done = true;
+      }
     }
     this.updateWafers(dt);
   }

@@ -55,7 +55,7 @@ export function evaluate(L) {
   const bad = items.filter(i => !i.ok).length;
   const u = L.usage();
   const stats = [
-    `总时间 ${(L.t / 60).toFixed(0)} min`,
+    `总时间 ${((L.t - (L.batchT0 || 0)) / 60).toFixed(0)} min`,
     `DIW ${u.diwL.toFixed(0)} L`,
     `HF 原液 ${(u.hfL * 1000).toFixed(0)} mL`,
     `IPA ${u.ipaL.toFixed(2)} L`,
