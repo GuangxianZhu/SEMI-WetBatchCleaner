@@ -10,7 +10,7 @@ const badItems = r => evaluate(simulate(r, 0.5)).items.filter(i => !i.ok).map(i 
 test('标准流程：五个单元按 药液槽 1 → 单槽 1 → 药液槽 2 → 单槽 2 → 减压干燥槽 排；每一步的种类和槽对得上', () => {
   assert.deepEqual(DEFAULT.flow.units.map(id => DEFAULT.units[id].bath), ['cb1', 'ob1', 'cb2', 'ob2', 'dr']);
   for (const p of PRESETS) for (const u of Object.values(p.r.units)) {
-    for (const s of u.steps) assert.equal(STEP_KINDS[s.kind].bath, BATHS[u.bath].type, `${p.id} ${u.name} ${s.kind}`);
+    for (const s of u.steps) assert.ok(STEP_KINDS[s.kind].baths.includes(BATHS[u.bath].type), `${p.id} ${u.name} ${s.kind}`);
   }
   const L = new Line(DEFAULT);
   assert.equal(L.steps.length, 3 + 5 + 1);

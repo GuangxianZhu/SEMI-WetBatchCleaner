@@ -10,25 +10,26 @@ export const BATHS = {
   ob1: { type: 'onebath', name: '单槽 1' },
   cb2: { type: 'chembath', kind: 'SC1', mega: true, name: '药液槽 2' },
   ob2: { type: 'onebath', name: '单槽 2' },
-  dr: { type: 'dryer', name: '减压干燥槽' },
+  dr: { type: 'dryer', name: '减压干燥槽', chems: ['HF', 'HCl'] },     // 干燥槽的注药只接了 HF、HCl
 };
 
-// 步骤的种类：每种有哪些项（配方页按这个画输入框）。when：这一项什么时候才有意义；need：槽要有这个硬件
+// 步骤的种类：每种有哪些项（配方页按这个画输入框）。baths：能用在哪几种槽；when：这一项什么时候才有意义；
+// need：槽要有这个硬件；chems：下拉框只列这个槽接了的药
 export const STEP_KINDS = {
   soak: {
-    name: '浸泡', bath: 'chembath', fields: [
+    name: '浸泡', baths: ['chembath'], fields: [
       { k: 's', name: '时间', unit: 's', min: 10, max: 3600, step: 10 },
       { k: 'mega', name: '兆声', unit: '%', min: 0, max: 100, step: 10, need: 'mega', tip: '约 1 MHz 的声波，帮忙把小颗粒冲走；0 = 不开' },
     ],
   },
   qdr: {
-    name: '快排冲洗', bath: 'onebath', fields: [
+    name: '快排冲洗', baths: ['onebath'], fields: [
       { k: 'T', name: '补水', unit: '°C', min: 25, max: 80, step: 5, tip: '快排后从槽底补水的温度。硫酸黏、难冲，SPM 之后先用热水' },
       { k: 'shower', name: '淋浴', type: 'toggle', tip: '排空那几秒让晶圆保持湿润，防图形倒塌' },
     ],
   },
   upflow: {
-    name: '上流冲洗', bath: 'onebath', fields: [
+    name: '上流冲洗', baths: ['onebath', 'dryer'], fields: [
       { k: 'lpm', name: '流量', unit: 'L/min', min: 10, max: 60, step: 5, tip: '流量越大置换越快，DIW 用得越多' },
       { k: 'T', name: '温度', unit: '°C', min: 25, max: 80, step: 5 },
       { k: 'end', name: '结束', type: 'select', options: [['rho', '按比电阻'], ['time', '按时间']] },
@@ -38,18 +39,18 @@ export const STEP_KINDS = {
     ],
   },
   inject: {
-    name: '注药', bath: 'onebath', fields: [
-      { k: 'chem', name: '药液', type: 'select', options: [['HF', 'HF'], ['HCl', 'HCl'], ['NH3', 'NH₄OH'], ['H2O2', 'H₂O₂']] },
+    name: '注药', baths: ['onebath', 'dryer'], fields: [
+      { k: 'chem', name: '药液', type: 'select', options: [['HF', 'HF'], ['HCl', 'HCl'], ['NH3', 'NH₄OH'], ['H2O2', 'H₂O₂']], chems: true },
       { k: 'ratio', name: '稀释 1 :', unit: '', min: 10, max: 1000, step: 10, tip: '原液 : DIW' },
       { k: 'lpm', name: '流量', unit: 'L/min', min: 10, max: 60, step: 5 },
       { k: 's', name: '时间', unit: 's', min: 10, max: 600, step: 10, tip: '满槽边进边溢，浓度慢慢爬升；刻蚀量 = 整条浓度曲线的积分' },
     ],
   },
-  purge: { name: 'N₂ 置换', bath: 'dryer', fields: [{ k: 'maxS', name: '最长', unit: 's', min: 30, max: 600, step: 30, tip: '把氧赶到 1 % 以下就进下一步；IPA 可燃，氧没降下来不能供 IPA' }] },
-  ipa: { name: 'IPA 供给', bath: 'dryer', fields: [{ k: 's', name: '时间', unit: 's', min: 10, max: 300, step: 10, tip: '在水面上形成一层 IPA，之后一直供到提拉结束' }] },
-  lift: { name: '慢速提拉', bath: 'dryer', fields: [{ k: 'mmS', name: '速度', unit: 'mm/s', min: 0.2, max: 6, step: 0.2, tip: '提得太快，水膜来不及被拉走' }] },
-  vacuum: { name: '减压', bath: 'dryer', fields: [{ k: 's', name: '时间', unit: 's', min: 10, max: 300, step: 10, tip: '压力低，残留液体在低温下很快蒸发，氧也少' }] },
-  n2dry: { name: 'N₂ 吹干', bath: 'dryer', fields: [{ k: 's', name: '时间', unit: 's', min: 10, max: 600, step: 10 }] },
+  purge: { name: 'N₂ 置换', baths: ['dryer'], fields: [{ k: 'maxS', name: '最长', unit: 's', min: 30, max: 600, step: 30, tip: '把氧赶到 1 % 以下就进下一步；IPA 可燃，氧没降下来不能供 IPA' }] },
+  ipa: { name: 'IPA 供给', baths: ['dryer'], fields: [{ k: 's', name: '时间', unit: 's', min: 10, max: 300, step: 10, tip: '在水面上形成一层 IPA，之后一直供到提拉结束' }] },
+  lift: { name: '慢速提拉', baths: ['dryer'], fields: [{ k: 'mmS', name: '速度', unit: 'mm/s', min: 0.2, max: 6, step: 0.2, tip: '提得太快，水膜来不及被拉走' }] },
+  vacuum: { name: '减压', baths: ['dryer'], fields: [{ k: 's', name: '时间', unit: 's', min: 10, max: 300, step: 10, tip: '压力低，残留液体在低温下很快蒸发，氧也少' }] },
+  n2dry: { name: 'N₂ 吹干', baths: ['dryer'], fields: [{ k: 's', name: '时间', unit: 's', min: 10, max: 600, step: 10 }] },
 };
 
 // 新加一步时的默认值
@@ -120,7 +121,17 @@ export const PRESETS = [
   preset('slow', '搬得太慢', r => { r.flow.airExtraS = 45; }),
   preset('fastlift', '提拉太快', r => { allSteps(r, 'lift').forEach(s => { s.mmS = 5; }); }),
   preset('noipa', '不用 IPA', r => { r.units.dry.steps = r.units.dry.steps.filter(s => s.kind !== 'ipa'); }),
+  // 不是错误配方：HF 放到干燥槽里做（单槽 2 只冲洗），HF 之后晶圆不出液面直接干燥
+  preset('hfdry', 'HF 放到干燥槽里', hfInDryer),
+  preset('slowhfdry', '搬得太慢，但 HF 在干燥槽里', r => { hfInDryer(r); r.flow.airExtraS = 45; }),
 ];
+function hfInDryer(r) {
+  const ob = r.units.dhf;
+  ob.name = 'SC1 后冲洗';
+  ob.steps = ob.steps.slice(0, 3);              // 快排 ×2 → 上流冲洗
+  r.units.dry.name = 'HF → 冲洗 → IPA 减压干燥';
+  r.units.dry.steps = [{ ...S('inject'), lpm: 30 }, S('upflow'), ...r.units.dry.steps];
+}
 
 // 从配方里归纳出几件事（结果页的提示用）
 export function recipeFacts(r) {

@@ -137,6 +137,8 @@ const EXPECT = {
   slow: ['part', 'wm', 'air'],
   fastlift: ['wm', 'col'],
   noipa: ['wm', 'col'],
+  hfdry: [],                    // HF 放到干燥槽里：HF 之后不出液面直接干燥
+  slowhfdry: ['part', 'air'],   // 搬得一样慢，但水痕没了（对比"搬得太慢"）
 };
 for (const p of PRESETS) {
   test(`预置配方「${p.name}」：不合格的项是 ${EXPECT[p.id].join('、') || '无'}`, () => {
