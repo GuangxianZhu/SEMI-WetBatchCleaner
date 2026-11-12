@@ -9,6 +9,7 @@ import { P, STATION_NAME, TANKS } from './params.js';
 import { BATHS } from './recipe.js';
 import { FLUID_NAME } from './piping.js';
 import { waitS, until, anim } from './gen.js';
+import { CB } from './chembath.js';
 
 const NAME = STATION_NAME;
 
@@ -84,13 +85,14 @@ function* robotTo(L, x, task) {
 // 夹爪清洗干燥：冲洗 → N₂ 吹干
 function* chuckClean(L) {
   yield* robotTo(L, P.X.chuck, '去夹爪清洗干燥位');
+  L.chuckChem = L.robot.chem;        // 夹爪上沾的是什么药：冲下来的水排到哪由它定（管路图用）
   L.chuckSt = 'wash'; L.robot.task = '冲洗夹爪';
   yield* waitS(P.chuckWashS);
   L.robot.chem = null;
   L.chuckSt = 'dry'; L.robot.task = 'N₂ 吹干夹爪';
   yield* waitS(P.chuckDryS);
   L.robot.wet = false;
-  L.chuckSt = null; L.robot.task = '待机';
+  L.chuckSt = null; L.chuckChem = null; L.robot.task = '待机';
 }
 
 export class TransferSub extends Sub {
@@ -272,9 +274,11 @@ function* bathExchange(S) {
     yield* until(() => cb.filled[k] >= cb.fillTarget[k], 1800);
     cb.valve[`V_${k}`] = false;
   }
-  S.say(`${nm}：外槽液位够了，开循环泵`);
+  S.say(`${nm}：外槽液位够了，开循环泵；过滤器排气阀开几秒，把过滤器里的空气顶回外槽`);
   cb.pump = true;
-  yield* waitS(5);
+  cb.valve.V_FV = true;
+  yield* waitS(CB.ventS);
+  cb.valve.V_FV = false;
   S.say(`${nm}：开加热器，升温到 ${cb.Tset} °C`);
   cb.heater = true;
   yield* until(() => cb.T >= cb.Tset - 0.05, 4 * 3600);

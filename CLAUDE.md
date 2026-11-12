@@ -18,4 +18,6 @@
 - 物理做到"趋势对、数量级对"，标明公认结论 / 估计参数，写清楚模型什么时候不准。
 - `sim/` 只算数、不碰界面，能用 `node --test` 单独测。
 - 常用命令（仓库根目录）：`npm install`（第一次）、`npm test`（单元测试）、`npm run build`（重新生成 `output/槽式清洗机_离线版.html`）。改了 `sim/` 或 `web/` 都要重新打包，离线版要一起提交。
+- 细模型：`python build_wetbench.py`（要 `pip install bpy`，或者 `blender -b -P build_wetbench.py`）生成 `output/wetbench_detail.glb`，再 `npm run build` 把它嵌进离线版；glb 也要提交。零件的说明（extras）写在 `build_wetbench.py` 里，同样遵守公开边界。
+- 在线版：`gh-pages` 分支的 `index.html` 就是离线版那个文件（https://guangxianzhu.github.io/SEMI-WetBatchCleaner/）。离线版更新了，要把它复制过去再推一次。
 - 改了模型系数以后，`npm test` 要保证：标准配方全部合格，每个错误配方错在它该错的那一项。

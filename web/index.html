@@ -97,6 +97,16 @@ label.chk{display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;
 #pidSvg .inst{fill:var(--panel);stroke:var(--fg);stroke-width:1.2}
 #pidSvg .lead{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3;fill:none}
 #pidSvg .sel{stroke:var(--accent);stroke-width:2.5}
+/* 细模型 */
+#detailBar{position:absolute;top:10px;left:10px;max-width:min(760px,calc(100% - 20px));z-index:3;background:color-mix(in srgb,var(--panel) 95%,transparent);border:1px solid var(--line);border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.14);padding:8px 10px}
+#detailBar[hidden]{display:none}
+#detailBar input[type=range]{width:120px;accent-color:var(--accent)}
+#detailBar select{max-width:210px}
+#dMoves .btn.on{border-color:var(--accent);color:var(--accent);font-weight:700}
+#dTip{font-size:12px;color:var(--muted);margin-top:5px}
+#detailBtn.on{background:var(--fg);color:var(--panel);border-color:var(--fg)}
+#app.detail #caption,#app.detail #dock,#app.detail #dockToggle,#app.detail .labels,#app.detail #pid{display:none !important}
+#app.detail #partcard{top:auto;bottom:12px}
 #dockToggle{position:absolute;right:12px;bottom:12px;border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:13px}
 
 #side{overflow:auto;background:var(--panel);border-left:1px solid var(--line)}
@@ -218,6 +228,18 @@ h4.fg .sub{color:var(--fg);font-weight:600;margin-left:6px}
   #side{border-left:0;border-top:1px solid var(--line);overflow:visible}
   #dock{transform:scale(.6);transform-origin:left bottom;left:6px;bottom:6px;max-width:none}
   #caption{font-size:12px;padding:4px 10px}
+  /* 细模型：手机上把舞台放高，顶栏只留标题和"细模型"按钮，说明卡压在下面一小条 */
+  #app.detail{grid-template-rows:auto 80vh auto}
+  #app.detail header .grp,#app.detail header label.chk,#app.detail #pidBtn{display:none}
+  #detailBar{top:6px;left:6px;max-width:calc(100% - 12px);padding:5px 7px;font-size:13px}
+  #detailBar .pidbar{gap:4px 8px}
+  #detailBar .seg button{padding:3px 7px}
+  #detailBar input[type=range]{width:80px}
+  #detailBar select{max-width:150px}
+  #dTip{display:none}
+  #app.detail #partcard{bottom:6px;left:6px;width:calc(100% - 12px);max-height:36%;overflow:auto;padding:7px 10px}
+  #app.detail #partcard h3{font-size:14px}
+  #app.detail #partcard p{font-size:12px;margin-top:4px}
 }
 </style>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/examples/jsm/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
@@ -229,12 +251,13 @@ h4.fg .sub{color:var(--fg);font-weight:600;margin-left:6px}
     <span id="state" class="pill">待机</span>
     <span class="grp"><span class="lbl">工艺时间</span><span id="time" class="pill">0:00</span></span>
     <span class="grp"><span class="lbl">视角</span><span class="seg" id="views">
-      <button data-v="overview" class="on">全线</button><button data-v="loader">装载区</button><button data-v="cb1">药液槽 1</button><button data-v="ob1">单槽 1</button><button data-v="cb2">药液槽 2</button><button data-v="ob2">单槽 2</button><button data-v="dr">干燥槽</button>
+      <button data-v="overview" class="on">全线</button><button data-v="loader">装载区</button><button data-v="chuck">夹爪清洗</button><button data-v="cb1">药液槽 1</button><button data-v="ob1">单槽 1</button><button data-v="cb2">药液槽 2</button><button data-v="ob2">单槽 2</button><button data-v="dr">干燥槽</button>
     </span></span>
     <label class="chk"><input type="checkbox" id="labels" checked>标签</label>
     <label class="chk"><input type="checkbox" id="follow" checked>镜头跟随</label>
     <label class="chk"><input type="checkbox" id="front" checked>机柜前板透明</label>
     <button class="btn" id="pidBtn">管路图</button>
+    <button class="btn" id="detailBtn" title="Blender 生成的细模型：药液槽、单槽、减压干燥槽、搬送。可以剖开、拉开、点零件看说明">细模型</button>
   </header>
 
   <main id="stage">
@@ -243,7 +266,7 @@ h4.fg .sub{color:var(--fg);font-weight:600;margin-left:6px}
     <div id="pid" hidden>
       <div class="pidbar">
         <b>管路图</b>
-        <span class="seg" id="pidTabs"><button data-t="cb1" class="on">药液槽 1</button><button data-t="ob1">单槽 1</button><button data-t="cb2">药液槽 2</button><button data-t="ob2">单槽 2</button><button data-t="dr">减压干燥槽</button></span>
+        <span class="seg" id="pidTabs"><button data-t="cb1" class="on">药液槽 1</button><button data-t="ob1">单槽 1</button><button data-t="cb2">药液槽 2</button><button data-t="ob2">单槽 2</button><button data-t="dr">减压干燥槽</button><button data-t="chuck">夹爪清洗</button></span>
         <label class="chk" title="跑批时，晶圆在哪个槽里，管路图就切到哪个槽"><input type="checkbox" id="pidFollow" checked>跟着晶圆</label>
         <button class="btn" id="pidEx" title="没在跑批时可以做：停泵和加热器 → 排液 → 补液 → 开泵 → 升温">换液（演示）</button>
         <button class="x" id="pidClose" aria-label="关闭">×</button>
@@ -252,6 +275,21 @@ h4.fg .sub{color:var(--fg);font-weight:600;margin-left:6px}
       <div id="pidInfo"></div>
       <div id="pidTip">点阀门、泵、加热器、过滤器看它是干什么的。正在流的管子按液体颜色显示，虚线往流动方向走。</div>
       <div class="pidleg" id="pidLeg"></div>
+    </div>
+    <div id="detailBar" hidden>
+      <div class="pidbar">
+        <b>细模型</b>
+        <span class="seg" id="dAsm"></span>
+        <span class="seg" id="dCut"><button data-c="0" class="on">完整</button><button data-c="1">剖切</button></span>
+        <label class="chk" title="液体、气体往哪流（示意）"><input type="checkbox" id="dFlow" checked>液流箭头</label>
+        <button class="x" id="dClose" aria-label="关闭">×</button>
+      </div>
+      <div class="pidbar" style="margin-top:6px">
+        <span class="grp"><span class="lbl">拉开</span><input type="range" id="dEx" min="0" max="1" step="0.01" value="0" aria-label="爆炸图"></span>
+        <span class="grp" id="dMoves"></span>
+        <select id="dParts" aria-label="零件"></select>
+      </div>
+      <div id="dTip"></div>
     </div>
     <div id="partcard" hidden><button class="x" id="pcClose" aria-label="关闭">×</button><h3></h3><div class="g"></div><p></p><button class="btn" id="pcZoom" title="镜头飞到这个零件跟前；在 3D 里点中哪一个就看哪一个">拉近看</button></div>
     <div id="dock">
@@ -332,6 +370,7 @@ setTimeout(function () {
   if (!window.__wetReady && !document.getElementById('jserr')) window.__showErr('脚本没有运行起来。如果你是在 App 的文件预览里打开的，请改用电脑或手机浏览器（Chrome / Edge / Safari）打开这个文件。');
 }, 4000);
 </script>
+<script id="glbData" type="application/octet-stream"></script>
 <script type="module" src="./app.js"></script>
 </body>
 </html>

@@ -18,6 +18,7 @@ export const DRY = {
   vCrit0: 0.1, vCritIpa: 2.0,   // mm/s
   tauO2: 15, tauO2Open: 5,      // N₂ 置换、开盖回到空气
   pVac: 5, tauVac: 10, tauVent: 5,   // kPa、s
+  trapCondLpm: 0.05, trapDrainLpm: 0.3,   // 冷阱：抽真空时凝下来的 IPA、排液的快慢（示意，只给管路图用）
 };
 
 export class Dryer {
@@ -30,6 +31,7 @@ export class Dryer {
     this.vacOn = false;
     this.pressure = 101.3; // kPa
     this.ipaL = 0;         // IPA 用量（示意：按供给时间 0.1 L/min 计）
+    this.trapL = 0;        // 冷阱里凝下来的 IPA（L，示意）
     this.lift = null;      // 正在慢速提拉时记录 { sumR, sumIpa, n }
     this.liq = new OneBath();   // 槽里的水（一开始是满槽干净的 DIW）
   }
@@ -45,6 +47,9 @@ export class Dryer {
     else this.ipa *= Math.exp(-dt / DRY.tauIpaOff);
     const pT = this.vacOn ? DRY.pVac : 101.3;
     this.pressure += (pT - this.pressure) * (1 - Math.exp(-dt / (this.vacOn ? DRY.tauVac : DRY.tauVent)));
+    // 冷阱：抽真空时把抽出来的 IPA 蒸气凝下来；回到大气压以后排掉（排液阀的开关在 sim/piping.js 的 dryerState）
+    if (this.vacOn) this.trapL += DRY.trapCondLpm / 60 * dt * Math.max(this.ipa, 0.2);
+    else if (this.pressure >= 99) this.trapL = Math.max(0, this.trapL - DRY.trapDrainLpm / 60 * dt);
   }
 
   // 慢速提拉的每一步：v 是提拉速度 mm/s

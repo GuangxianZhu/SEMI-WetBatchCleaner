@@ -13,12 +13,13 @@ export const CB = {
   fillLpm: { DIW: 20, C1: 12, C2: 12 },
   heaterKW: 6,
   tauLossS: 3000,        // 加热器停了以后的散热时间常数
+  ventS: 8,              // 换液后开泵，过滤器排气阀开这么久（估计）
   pumpMinOuter: 0.3,     // 外槽液位低于 30 % 不能开泵（泵会空转、吸进空气）
   // 密度 kg/L、比热 kJ/(kg·K)：SPM 按浓硫酸，SC1 按水（估计）
   rho: { SPM: 1.8, SC1: 1.0 }, cp: { SPM: 1.5, SC1: 4.0 },
 };
 
-const VALVES = ['V_DIW', 'V_C1', 'V_C2', 'V_DR', 'V_DRO'];
+const VALVES = ['V_DIW', 'V_C1', 'V_C2', 'V_DR', 'V_DRO', 'V_FV'];   // V_FV：过滤器排气阀（只影响管路图里的流向，不算体积）
 
 export class ChemBath {
   // kind：'SPM' 或 'SC1'

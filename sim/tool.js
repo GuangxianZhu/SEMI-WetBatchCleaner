@@ -16,13 +16,13 @@ import { Dryer } from './dryer.js';
 import { Surface } from './surface.js';
 import { DEFAULT, cloneRecipe, unitOfBath, recipeFacts } from './recipe.js';
 import { SPECIES } from './chem.js';
-import { buildGraph, chemBathTemplate, oneBathTemplate, dryerTemplate, computeFlows, chemBathState, oneBathState, dryerState, checkInterlocks } from './piping.js';
+import { buildGraph, chemBathTemplate, oneBathTemplate, dryerTemplate, chuckTemplate, computeFlows, chemBathState, oneBathState, dryerState, chuckState, checkInterlocks } from './piping.js';
 import { Bus } from './bus.js';
 import { Main, lineSteps } from './main.js';
 import { LoaderSub, TransferSub, BathSub } from './subs.js';
 
-// 管路（药液槽、单槽、减压干燥槽的模板，见 docs/管路.md；夹爪清洗干燥位以后再做）
-export const PIPING = buildGraph([chemBathTemplate('cb1', 'SPM'), oneBathTemplate('ob1'), chemBathTemplate('cb2', 'SC1'), oneBathTemplate('ob2'), dryerTemplate('dr')]);
+// 管路（药液槽、单槽、减压干燥槽、夹爪清洗干燥位的模板，见 docs/管路.md）
+export const PIPING = buildGraph([chemBathTemplate('cb1', 'SPM'), oneBathTemplate('ob1'), chemBathTemplate('cb2', 'SC1'), oneBathTemplate('ob2'), dryerTemplate('dr'), chuckTemplate('chuck')]);
 
 const NAME = STATION_NAME;
 const isCb = id => id === 'cb1' || id === 'cb2';
@@ -47,6 +47,7 @@ export class Line {
     this.dr = new Dryer();
     this.surf = new Surface();
     this.chuckSt = null;               // 'wash' / 'dry' / null
+    this.chuckChem = null;             // 正在洗的夹爪上沾的药（'SPM' / 'SC1' / null：只沾了水）
     this.carry = null;                 // 晶圆身上带着的液体
     this.air = { t: 0, active: false, from: null, log: [] };
     this.lastTank = null;
@@ -96,6 +97,7 @@ export class Line {
     oneBathState('ob1', this.ob1, state);
     oneBathState('ob2', this.ob2, state);
     dryerState('dr', this.dr, state);
+    chuckState('chuck', { st: this.chuckSt, chem: this.chuckChem, present: Math.abs(this.robot.x - P.X.chuck) < 1e-3 }, state);
     const { flows, blocked } = computeFlows(PIPING, state);
     return { state, flows, blocked, bad: checkInterlocks(PIPING, state, flows, blocked) };
   }

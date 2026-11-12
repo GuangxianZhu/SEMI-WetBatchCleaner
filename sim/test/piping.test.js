@@ -6,7 +6,7 @@ import { ChemBath, CB } from '../chembath.js';
 import { OneBath } from '../onebath.js';
 import { P } from '../params.js';
 import { DEFAULT, PRESETS } from '../recipe.js';
-import { computeFlows, checkInterlocks, oneBathState } from '../piping.js';
+import { computeFlows, checkInterlocks, oneBathState, chuckState } from '../piping.js';
 
 const flowing = (fl, a, b) => fl[`${a}>${b}`];
 const CIRC = id => [[`${id}.OUT`, `${id}.PUMP`], [`${id}.PUMP`, `${id}.HTR`], [`${id}.HTR`, `${id}.FLT`], [`${id}.FLT`, `${id}.IN`]];
@@ -16,7 +16,7 @@ test('拓扑：管段端点都存在、编号不重复；每个阀、泵、加�
   for (const id in PIPING.nodes) {
     const n = PIPING.nodes[id], i = PIPING.inn[id].length, o = PIPING.out[id].length;
     if (PASS.includes(n.kind)) assert.ok(i > 0 && o > 0, id);
-    if (/^(cb|ob)/.test(id) && n.kind !== 'device') assert.ok(i + o > 0, `${id} 孤立`);
+    if (/^(cb|ob|dr|chuck)/.test(id) && n.kind !== 'device') assert.ok(i + o > 0, `${id} 孤立`);
   }
   const ids = PIPING.edges.map(e => e.id);
   assert.equal(new Set(ids).size, ids.length);
@@ -60,8 +60,14 @@ for (const [id, kind, sink] of [['cb1', 'SPM', 'sink.acid'], ['cb2', 'SC1', 'sin
       if (cb.valve.V_DIW) { seen.add('diw'); assert.ok(flowing(flows, 'src.DIW', `${id}.V_DIW`)); }
       if (cb.valve.V_C1) { seen.add('c1'); assert.ok(flowing(flows, `src.${cb.chem[0]}`, `${id}.V_C1`)); }
       if (cb.valve.V_C2) { seen.add('c2'); assert.ok(flowing(flows, `src.${cb.chem[1]}`, `${id}.V_C2`)); }
+      // 过滤器排气：只在刚开泵时开，气和药液回外槽
+      if (cb.valve.V_FV) {
+        seen.add('vent');
+        assert.ok(cb.pump && !cb.heater, '排气时泵在转、加热器还没开');
+        assert.ok(flowing(flows, `${id}.FLT`, `${id}.V_FV`) && flowing(flows, `${id}.V_FV`, `${id}.OUT`), '过滤器 → 排气阀 → 外槽');
+      } else assert.equal(flowing(flows, `${id}.FLT`, `${id}.V_FV`), undefined);
     }
-    assert.ok(seen.has('drain') && seen.has('c1') && seen.has('c2'));
+    assert.ok(seen.has('drain') && seen.has('c1') && seen.has('c2') && seen.has('vent'));
     if (kind === 'SC1') assert.ok(seen.has('diw'));
     const want = cb.mixConc();
     for (const s of cb.chem) assert.ok(Math.abs(cb.c[s] - want[s]) / want[s] < 0.02, `${s} ${cb.c[s]} vs ${want[s]}`);
@@ -275,4 +281,73 @@ test('干燥槽联锁：盖子没关就开 IPA 阀、盖子没关就抽真空，
   assert.match(check(d => { d.vacOn = true; }), /盖子没关就抽真空/);
   assert.match(check(d => { d.lid = 1; d.o2 = 15; d.ipaOn = true; }), /氧浓度没降下来/);
   assert.equal(check(d => { d.lid = 1; d.o2 = 0.5; d.ipaOn = true; }), '');
+});
+
+test('干燥槽的冷阱排液：抽真空时凝下 IPA，回到大气压以后才排到有机排液；抽真空时排液阀不开', () => {
+  const seen = new Set();
+  const L = runBatch(DEFAULT, (L, { state, flows, bad }) => {
+    assert.deepEqual(bad, []);
+    if (L.dr.vacOn) { seen.add('vac'); assert.equal(state.open['dr.V_TD'], false); assert.equal(flows['dr.V_TD>sink.org'], undefined); }
+    if (state.open['dr.V_TD']) {
+      seen.add('drain');
+      assert.ok(L.dr.pressure >= 99 && !L.dr.vacOn);
+      assert.equal(flows['dr.COND>dr.V_TD'], 'IPA');
+      assert.equal(flows['dr.V_TD>sink.org'], 'IPA');
+    }
+  });
+  assert.deepEqual([...seen].sort(), ['drain', 'vac']);
+  assert.ok(L.dr.trapL < 1e-3, '最后冷阱排空了');
+  // 联锁：抽真空时开冷阱排液阀
+  const T = new Line(DEFAULT);
+  T.dr.lid = 1; T.dr.o2 = 0.5; T.dr.vacOn = true;
+  const p = T.piping();
+  p.state.open['dr.V_TD'] = true;
+  assert.match(checkInterlocks(PIPING, p.state, p.flows, p.blocked).join('\n'), /抽真空时开着冷阱排液阀/);
+});
+
+// ---------- 夹爪清洗干燥位 ----------
+test('夹爪清洗，标准配方整批：冲洗、吹干走对的管；SPM 之后排酸、SC1 之后排碱、取干片之前排酸；没有联锁问题', () => {
+  const seen = [];
+  const note = s => { if (seen[seen.length - 1] !== s) seen.push(s); };
+  runBatch(DEFAULT, (L, { state, flows, bad }) => {
+    assert.deepEqual(bad, [], `${(L.t / 60).toFixed(1)} min ${L.phase}`);
+    const f = id => flows[id], o = v => state.open[`chuck.${v}`];
+    if (L.chuckSt === 'wash') {
+      assert.ok(o('V_W') && !o('V_N'));
+      assert.equal(f('src.DIW>chuck.V_W'), 'DIW');
+      assert.equal(f('chuck.NOZ_W>chuck.BOX'), 'DIW');
+      assert.ok(f('chuck.BOX>sink.exAcid'), '冲洗时排风在抽');
+      const acid = f('chuck.V_DA>sink.acid'), alk = f('chuck.V_DK>sink.alk');
+      assert.ok(!(acid && alk), '同时只走一路');
+      note(`wash ${L.chuckChem || '水'} → ${acid ? '酸 ' + acid : '碱 ' + alk}`);
+    } else if (L.chuckSt === 'dry') {
+      assert.ok(o('V_N') && !o('V_W'));
+      assert.equal(f('chuck.NOZ_N>chuck.BOX'), 'N2');
+      assert.equal(f('src.DIW>chuck.V_W'), undefined);
+      assert.ok(o('V_DA') || o('V_DK'), '吹干时排液阀还开着');
+      assert.ok(f('chuck.BOX>sink.exAcid'), '吹干时排风在抽');
+      note('dry');
+    } else {
+      for (const v of ['V_W', 'V_N', 'V_DA', 'V_DK']) assert.equal(o(v), false, v);
+      for (const e in flows) assert.ok(!e.includes('chuck.'), e);
+    }
+  });
+  assert.deepEqual(seen, ['wash SPM → 酸 RA', 'dry', 'wash SC1 → 碱 RK', 'dry', 'wash 水 → 酸 DIW', 'dry']);
+});
+
+test('夹爪清洗联锁：冲洗和吹干同时开、进水时排液全关、夹爪不在就喷、碱性冲洗水进酸排液，都报出来', () => {
+  const check = (ck, mutate = () => {}) => {
+    const state = chuckState('chuck', ck, { open: {}, run: {}, tank: {} });
+    mutate(state.open);
+    const { flows, blocked } = computeFlows(PIPING, state);
+    return checkInterlocks(PIPING, state, flows, blocked).join('\n');
+  };
+  const wash = { st: 'wash', chem: 'SC1', present: true };
+  assert.equal(check(wash), '');
+  assert.equal(check({ st: 'dry', chem: null, present: true }), '');
+  assert.equal(check({ st: null, chem: null, present: false }), '');
+  assert.match(check(wash, o => { o['chuck.V_N'] = true; }), /冲洗阀和吹干阀同时开着/);
+  assert.match(check(wash, o => { o['chuck.V_DK'] = false; }), /清洗位在进水，但排液阀全关/);
+  assert.match(check({ ...wash, present: false }), /夹爪不在清洗位就开了冲洗/);
+  assert.match(check(wash, o => { o['chuck.V_DK'] = false; o['chuck.V_DA'] = true; }), /碱性冲洗水 流进了酸排液/);
 });
